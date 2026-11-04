@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Grade ENC</title>
+<meta name="description" content="Controle da grade de Engenharia da Computação: fluxograma editável, notas e previsão de formatura.">
+<meta name="theme-color" content="#F1F4EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111714" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Grade ENC">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<!-- BUILD:START (o script de build do artifact usa só o que está entre os marcadores) -->
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,500..800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="titlerow">
+    <div>
+      <div class="eyebrow">Engenharia da Computação · fluxograma ENC</div>
+      <h1>Grade ENC</h1>
+    </div>
+    <span class="savepill" id="savepill" data-s="local"><i></i><span id="savetxt">Carregando…</span></span>
+  </div>
+
+  <!-- RESUMO -->
+  <section class="pane" id="pane-resumo" data-pane="resumo">
+    <div class="hoursbar" id="hoursbar" aria-label="Progresso em horas"><span class="hb-done"></span><span class="hb-cur"></span><span class="hb-plan"></span></div>
+    <div class="stats" id="stats"></div>
+    <div class="install" id="install" hidden>
+      <span id="install-txt">Instale a Grade ENC no celular para abrir como um app, mesmo sem internet.</span>
+      <button class="btn primary" id="b-install" hidden>Instalar app</button>
+    </div>
+  </section>
+
+  <!-- GRADE -->
+  <section class="pane" id="pane-grade" data-pane="grade">
+    <div class="sechead">
+      <div>
+        <div class="eyebrow">Toque numa disciplina para editar</div>
+        <h2>Grade</h2>
+      </div>
+      <div class="switch" role="group" aria-label="Modo de visualização">
+        <button type="button" data-view="lista">Lista</button>
+        <button type="button" data-view="fluxo">Fluxograma</button>
+      </div>
+    </div>
+
+    <div id="view-lista" class="listtools">
+      <input type="search" id="q" class="search" placeholder="Buscar por nome ou código (ex.: redes, 42)" autocomplete="off">
+      <div class="filters" id="filters" role="group" aria-label="Filtrar por situação"></div>
+      <div class="semlist" id="semlist"></div>
+    </div>
+
+    <div id="view-fluxo" class="listtools">
+      <div class="legend">
+        <span><i class="chip c-done"></i>Concluída</span>
+        <span><i class="chip c-cur"></i>Cursando</span>
+        <span><i class="chip c-plan"></i>Planejada</span>
+        <span><i class="chip c-pend"></i>Pendente</span>
+        <label class="toggle"><input type="checkbox" id="t-edges" checked> Setas</label>
+      </div>
+      <div class="flowbox"><div class="flow" id="flow"><svg id="edges" aria-hidden="true"></svg></div></div>
+      <p class="hint">Passe o mouse (ou toque) para ver de onde vêm os pré-requisitos e o que a disciplina libera. O “!” laranja indica algo cursando ou planejado com pré-requisito ainda não concluído.</p>
+    </div>
+  </section>
+
+  <!-- PREVISÃO -->
+  <section class="pane" id="pane-previsao" data-pane="previsao">
+    <div class="sechead"><div><div class="eyebrow">Com base nas horas que faltam</div><h2>Previsão de conclusão</h2></div></div>
+    <div class="forecast-grid">
+      <div class="panel">
+        <div class="field">
+          <label for="s-atual">Semestre atual</label>
+          <input type="text" id="s-atual" class="mono" placeholder="2026/2" inputmode="numeric">
+          <small>As disciplinas “cursando” contam como concluídas no fim dele.</small>
+        </div>
+        <div class="field">
+          <label for="s-ingresso">Semestre de ingresso</label>
+          <input type="text" id="s-ingresso" class="mono" placeholder="ex.: 2023/1" inputmode="numeric">
+          <small>Usado para calcular seu ritmo histórico (h por semestre).</small>
+        </div>
+        <div class="field">
+          <label for="s-cap">Carga máxima por semestre</label>
+          <div class="rangerow"><input type="range" id="s-cap-r" min="136" max="544" step="34" aria-label="Carga máxima (controle deslizante)"><input type="number" id="s-cap" class="mono" min="34" max="900" step="34"></div>
+          <small>Padrão = sua carga atual. A grade ideal tem 391 h/sem (3.128 h ÷ 8).</small>
+        </div>
+        <label class="toggle"><input type="checkbox" id="s-enforce"> Respeitar pré-requisitos no plano</label>
+      </div>
+      <div class="panel why" id="why"></div>
+    </div>
+    <div class="plan" id="plan"></div>
+  </section>
+
+  <!-- BACKUP (no celular aparece na aba Resumo) -->
+  <section class="pane" id="pane-backup" data-pane="resumo">
+    <div class="sechead"><div><div class="eyebrow">Seus dados</div><h2>Backup</h2></div></div>
+    <p class="hint" id="backup-hint">Seus dados ficam salvos neste aparelho. Para levar para outro (do PC para o celular, por exemplo), exporte aqui e importe lá.</p>
+    <div class="tools">
+      <button class="btn" id="b-export">Exportar JSON</button>
+      <label class="btn" for="f-import">Importar JSON</label>
+      <input type="file" id="f-import" accept="application/json,.json" hidden>
+      <button class="btn ghost danger" id="b-reset">Restaurar tudo como no PDF</button>
+      <span class="msg" id="toolmsg" role="status"></span>
+    </div>
+  </section>
+</div>
+
+<nav class="tabbar" id="tabbar" aria-label="Seções">
+  <a href="#resumo" data-tab="resumo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="13" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>Resumo</a>
+  <a href="#grade" data-tab="grade"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="7" height="5" rx="1.2"/><rect x="14.5" y="4" width="7" height="5" rx="1.2"/><rect x="14.5" y="15" width="7" height="5" rx="1.2"/><path d="M9.5 6.5h5M18 9v6"/></svg>Grade</a>
+  <a href="#previsao" data-tab="previsao"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 15l2.5 2.5L16 13"/></svg>Previsão</a>
+</nav>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Editar disciplina">
+  <span class="grab" aria-hidden="true"></span>
+  <div class="dh">
+    <div><div class="eyebrow" id="d-code"></div><h3 id="d-name"></h3></div>
+    <button class="btn ghost" id="d-close">Fechar</button>
+  </div>
+  <div class="seg" id="d-status" role="group" aria-label="Situação">
+    <button type="button" data-v="feita">Concluída</button><button type="button" data-v="cursando">Cursando</button><button type="button" data-v="planejada">Planejada</button><button type="button" data-v="pendente">Pendente</button>
+  </div>
+  <div id="d-alert"></div>
+  <div class="two">
+    <div class="field"><label for="d-sem" id="d-sem-l">Semestre</label><input type="text" id="d-sem" class="mono" placeholder="2025/2" inputmode="numeric"></div>
+    <div class="field"><label for="d-nota">Nota final</label><input type="number" id="d-nota" class="mono" min="0" max="10" step="0.1" placeholder="0–10" inputmode="decimal"></div>
+  </div>
+  <div class="field">
+    <label for="d-notas">Anotações</label>
+    <textarea id="d-notas" placeholder="Professor, critérios de avaliação, datas de prova, links do material, dicas para quem vai cursar…"></textarea>
+  </div>
+  <div class="field">
+    <label>Pré-requisitos</label>
+    <div class="prelist" id="d-pre"></div>
+    <select id="d-addpre" aria-label="Adicionar pré-requisito"></select>
+    <small>Lidos das setas do PDF. Ajuste se a sua coordenação usar outros.</small>
+  </div>
+  <div class="field">
+    <label>Libera</label>
+    <div class="prelist" id="d-libera"></div>
+  </div>
+  <div class="tools"><button class="btn ghost danger" id="d-reset">Voltar ao estado do PDF</button></div>
+</aside>
+<!-- BUILD:END -->
+
+<script src="assets/data.js"></script>
+<script>window.GRADE_STANDALONE = true;</script>
+<script src="assets/app.js"></script>
+</body>
+</html>
