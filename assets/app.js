@@ -46,6 +46,7 @@
       sem: o.sem || "",
       nota: o.nota === 0 || o.nota ? o.nota : "",
       notas: o.notas || "",
+      datas: Array.isArray(o.datas) ? o.datas : [],
       pre: Array.isArray(o.pre) ? o.pre : PRE[c] || [],
     };
   }
@@ -53,6 +54,7 @@
   function setOv(c, patch) {
     const o = Object.assign({}, S.ov[c] || {}, patch);
     Object.keys(o).forEach((k) => { if (o[k] === "" || o[k] == null) delete o[k]; });
+    if (o.datas && !o.datas.length) delete o.datas;
     if (o.status === baseStatus(c)) delete o.status;
     if (o.pre && JSON.stringify(o.pre.slice().sort()) === JSON.stringify((PRE[c] || []).slice().sort())) delete o.pre;
     if (Object.keys(o).length) S.ov[c] = o; else delete S.ov[c];
@@ -68,7 +70,24 @@
   const semEnd = (i) => (i % 2 === 0 ? "julho" : "dezembro") + " de " + Math.floor(i / 2);
   const fmt = (n) => n.toLocaleString("pt-BR");
   const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+  const nota2 = (n) => n.toFixed(2).replace(".", ",");
   const norm = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+  /** Tamanho da maior cadeia de pré-requisitos que começa em cada disciplina restante. */
+  function chainDepths(remaining, remSet) {
+    const memo = {};
+    function depth(c, seen) {
+      if (memo[c] != null) return memo[c];
+      if (seen.has(c)) return 1; // proteção contra ciclos criados por edição
+      seen.add(c);
+      let m = 0;
+      dependents(c).forEach((x) => { if (remSet.has(x)) m = Math.max(m, depth(x, seen)); });
+      seen.delete(c);
+      return (memo[c] = 1 + m);
+    }
+    remaining.forEach((d) => depth(d.code, new Set()));
+    return memo;
+  }
 
   /**
    * Monta o plano semestre a semestre (ordenação topológica com limite de horas):
@@ -84,17 +103,7 @@
     let remaining = all.filter((d) => d.status === "pendente" || d.status === "planejada");
     const remSet = new Set(remaining.map((d) => d.code));
 
-    const memo = {};
-    function depth(c, seen) {
-      if (memo[c] != null) return memo[c];
-      if (seen.has(c)) return 1; // proteção contra ciclos criados por edição
-      seen.add(c);
-      let m = 0;
-      dependents(c).forEach((x) => { if (remSet.has(x)) m = Math.max(m, depth(x, seen)); });
-      seen.delete(c);
-      return (memo[c] = 1 + m);
-    }
-    remaining.forEach((d) => depth(d.code, new Set()));
+    const memo = chainDepths(remaining, remSet);
     const crit = remaining.reduce((m, d) => Math.max(m, memo[d.code]), 0);
 
     const pinnedAt = (d) => (d.status === "planejada" ? parseSem(d.sem) : null);
@@ -152,7 +161,7 @@
   setView(view);
 
   // ===================== 4. FLUXOGRAMA =====================
-  const CW = 156, CH = 84, CG = 46, RG = 22, PADX = 18, PADT = 52;
+  const CW = 156, CH = 94, CG = 46, RG = 22, PADX = 18, PADT = 52;
   const X = (c) => PADX + c * (CW + CG), Y = (r) => PADT + r * (CH + RG);
   const flow = document.getElementById("flow"), svg = document.getElementById("edges");
   flow.style.width = PADX * 2 + 8 * CW + 7 * CG + "px";
@@ -299,10 +308,71 @@
       ['<span class="sw" style="background:var(--pend)"></span>Faltam depois', fmt(hp + hn) + " h", cnt("planejada") + cnt("pendente") + " disciplinas de " + fmt(TOTAL) + " h"],
       ["Conclusão prevista", semLabel(last), "fim em " + semEnd(last)],
     ];
-    if (cr != null) st.push(["Média ponderada (CR)", cr.toFixed(2).replace(".", ","), graded.length + " notas lançadas, peso = horas"]);
+    st.push(["Média ponderada (CR)", cr != null ? nota2(cr) : "—", cr != null ? graded.length + " de " + cnt("feita") + " concluídas com nota · peso = horas" : "Lance as notas das matérias concluídas"]);
     document.getElementById("stats").innerHTML = st.map((s, i) =>
       `<div class="stat${i === 3 ? " forecast" : ""}"><small>${s[0]}</small><b>${s[1]}</b><small>${s[2]}</small></div>`).join("");
   }
+
+  /** Média de cada semestre e a acumulada até ele, a partir das notas com "Cursada em". */
+  function renderCrHistory() {
+    const box = document.getElementById("crhist");
+    const graded = CODES.map(D).filter((d) => d.status === "feita" && d.nota !== "" && !isNaN(+d.nota));
+    box.hidden = !graded.length;
+    if (!graded.length) { box.innerHTML = ""; return; }
+    const bySem = new Map();
+    graded.forEach((d) => {
+      const i = parseSem(d.sem); if (i == null) return;
+      if (!bySem.has(i)) bySem.set(i, []);
+      bySem.get(i).push(d);
+    });
+    let pts = 0, hrs = 0;
+    const rows = [...bySem.keys()].sort((a, b) => a - b).map((i) => {
+      const ds = bySem.get(i), sp = ds.reduce((s, d) => s + d.nota * d.h, 0), sh = ds.reduce((s, d) => s + d.h, 0);
+      pts += sp; hrs += sh;
+      const m = sp / sh;
+      return `<tr><th scope="row" class="mono">${semLabel(i)}</th>
+        <td class="crbar" aria-hidden="true"><span style="width:${m * 10}%"></span></td>
+        <td class="mono">${nota2(m)}</td><td class="mono">${nota2(pts / hrs)}</td></tr>`;
+    }).join("");
+    const noSem = graded.length - [...bySem.values()].reduce((s, a) => s + a.length, 0);
+    box.innerHTML = `<div class="eyebrow">Média por semestre</div>` +
+      (rows ? `<table class="crtable"><thead><tr><th scope="col">Semestre</th><td aria-hidden="true"></td><th scope="col">Média</th><th scope="col">Acumulada</th></tr></thead><tbody>${rows}</tbody></table>` : "") +
+      (noSem ? `<p class="msg">${noSem === 1 ? "1 nota não aparece aqui" : noSem + " notas não aparecem aqui"} por falta do semestre. Preencha “Cursada em” na matéria.</p>` : "");
+  }
+
+  /** O que dá para cursar agora e o que libera se você passar no que está cursando. */
+  function renderNext() {
+    const all = CODES.map(D);
+    const open = all.filter((d) => d.status === "pendente" || d.status === "planejada");
+    const openSet = new Set(open.map((d) => d.code));
+    const chain = chainDepths(open, openSet);
+    const unlocks = (c) => {
+      const seen = new Set();
+      (function walk(x) { dependents(x).forEach((y) => { if (openSet.has(y) && !seen.has(y)) { seen.add(y); walk(y); } }); })(c);
+      seen.delete(c);
+      return seen.size;
+    };
+    const okNow = (p) => !BYCODE[p] || D(p).status === "feita";
+    const okSoon = (p) => okNow(p) || D(p).status === "cursando";
+    const blocksCur = (c) => dependents(c).filter((x) => D(x).status === "cursando");
+    const rank = (a, b) => blocksCur(b.code).length - blocksCur(a.code).length || chain[b.code] - chain[a.code] || unlocks(b.code) - unlocks(a.code) || a.col - b.col || a.code.localeCompare(b.code);
+    const ready = open.filter((d) => d.pre.every(okNow)).sort(rank);
+    const soon = open.filter((d) => !d.pre.every(okNow) && d.pre.every(okSoon)).sort(rank);
+    const row = (d) => {
+      const n = unlocks(d.code), k = chain[d.code], cur = blocksCur(d.code);
+      return `<button type="button" class="row st-${d.status}" data-open="${d.code}">
+        <span class="bar"></span>
+        <span class="txt"><span class="nm">${esc(d.name)}</span>
+          <span class="meta"><span>ENC-${d.code}</span><span>${d.h} h</span>${d.status === "planejada" ? "<span>planejada</span>" : ""}${k > 1 ? `<span>cadeia de ${k} sem.</span>` : ""}${cur.length ? `<span class="needcur">pré-requisito de ${cur.map((x) => "ENC-" + x).join(", ")}, que você está cursando</span>` : ""}</span></span>
+        <span class="right">${n ? `<span class="pill">destrava ${n}</span>` : ""}</span>
+      </button>`;
+    };
+    const group = (title, list, empty) => `<div class="semgroup nextgroup"><div class="nexthead"><b>${title}</b><span class="mono">${list.length}</span></div>${list.length ? list.map(row).join("") : `<p class="msg">${empty}</p>`}</div>`;
+    document.getElementById("next").innerHTML =
+      group("Liberadas agora", ready, "Nenhuma disciplina liberada no momento.") +
+      group("Liberadas se passar no que está cursando", soon, "Nenhuma disciplina depende só do que você está cursando.");
+  }
+  document.getElementById("next").addEventListener("click", (e) => { const b = e.target.closest("[data-open]"); if (b) openDrawer(b.dataset.open); });
 
   function renderForecast(P) {
     const all = CODES.map(D);
@@ -338,7 +408,7 @@ plano abaixo   = ${left} sem.</div>
 
   function render() {
     const P = computePlan();
-    renderSummary(P); renderFlow(); renderList(); renderForecast(P); syncCfg();
+    renderSummary(P); renderCrHistory(); renderNext(); renderFlow(); renderList(); renderForecast(P); syncCfg();
     if (selected) fillDrawerLists();
   }
 
@@ -363,7 +433,35 @@ plano abaixo   = ${left} sem.</div>
   const drawer = document.getElementById("drawer"), scrim = document.getElementById("scrim");
   const dSem = document.getElementById("d-sem"), dNota = document.getElementById("d-nota"),
     dNotas = document.getElementById("d-notas"), dAdd = document.getElementById("d-addpre");
+  const dtForm = document.getElementById("d-dt-form"), dtTipo = document.getElementById("d-dt-tipo"),
+    dtData = document.getElementById("d-dt-data"), dtTitulo = document.getElementById("d-dt-titulo"),
+    dtMsg = document.getElementById("d-dt-msg"), dtList = document.getElementById("d-datas");
   let lastFocus = null;
+
+  // Provas e trabalhos: guardados como { tipo, data: "AAAA-MM-DD", titulo }.
+  function parseDay(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return null;
+    const t = new Date(+m[1], +m[2] - 1, +m[3]);
+    return t.getMonth() === +m[2] - 1 ? t : null;
+  }
+  function daysUntil(t) {
+    const n = new Date();
+    return Math.round((t - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 864e5);
+  }
+  const relDay = (n) => n === 0 ? "hoje" : n === 1 ? "amanhã" : n === -1 ? "ontem" : n > 1 ? "em " + n + " dias" : "há " + -n + " dias";
+  function renderDates(d) {
+    const items = d.datas.map((x, i) => {
+      const t = x && parseDay(x.data);
+      return t ? { i, t, n: daysUntil(t), tipo: x.tipo === "trabalho" ? "Trabalho" : "Prova", titulo: x.titulo || "" } : null;
+    }).filter(Boolean);
+    const next = items.filter((x) => x.n >= 0).sort((a, b) => a.t - b.t);
+    const past = items.filter((x) => x.n < 0).sort((a, b) => b.t - a.t);
+    dtList.innerHTML = next.concat(past).map((x) => `<li class="ditem${x.n < 0 ? " past" : x.n <= 3 ? " soon" : ""}">
+        <span class="dtype">${x.tipo}</span>
+        <span class="dtxt"><b>${x.t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}</b><small>${x.titulo ? esc(x.titulo) + " · " : ""}<span class="drel">${relDay(x.n)}</span></small></span>
+        <button type="button" data-rm-dt="${x.i}" aria-label="Remover ${x.tipo.toLowerCase()} de ${x.t.toLocaleDateString("pt-BR")}">×</button>
+      </li>`).join("") || '<li class="msg">Nenhuma data cadastrada.</li>';
+  }
   function openDrawer(c) {
     if (!selected) lastFocus = document.activeElement;
     selected = c;
@@ -371,6 +469,7 @@ plano abaixo   = ${left} sem.</div>
     document.getElementById("d-code").textContent = "ENC-" + c + " · " + d.h + " h · " + (d.col + 1) + "º semestre da grade";
     document.getElementById("d-name").textContent = d.name;
     dSem.value = d.sem; dNota.value = d.nota; dNotas.value = d.notas;
+    dtData.value = ""; dtTitulo.value = ""; dtMsg.textContent = "";
     fillDrawerLists();
     drawer.hidden = false; scrim.hidden = false; drawer.scrollTop = 0;
     highlight(c);
@@ -384,6 +483,7 @@ plano abaixo   = ${left} sem.</div>
     const c = selected; if (!c) return;
     const d = D(c);
     drawer.querySelectorAll("#d-status button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === d.status)));
+    renderDates(d);
     document.getElementById("d-sem-l").textContent = d.status === "feita" ? "Cursada em" : d.status === "planejada" ? "Planejar para" : "Semestre";
     const miss = preMissing(d);
     document.getElementById("d-alert").innerHTML = (d.status === "cursando" || d.status === "planejada") && miss.length
@@ -402,9 +502,23 @@ plano abaixo   = ${left} sem.</div>
   dSem.addEventListener("input", () => { if (!selected) return; setOv(selected, { sem: dSem.value.trim() }); render(); });
   dNota.addEventListener("input", () => { if (!selected) return; const v = dNota.value === "" ? "" : Math.max(0, Math.min(10, +dNota.value)); setOv(selected, { nota: v }); render(); });
   dNotas.addEventListener("input", () => { if (!selected) return; setOv(selected, { notas: dNotas.value }); renderFlow(); renderList(); });
+  dtForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!selected) return;
+    if (!parseDay(dtData.value)) { dtMsg.textContent = "Escolha uma data para adicionar."; dtData.focus(); return; }
+    setOv(selected, { datas: D(selected).datas.concat({ tipo: dtTipo.value, data: dtData.value, titulo: dtTitulo.value.trim() }) });
+    dtData.value = ""; dtTitulo.value = ""; dtMsg.textContent = "Data adicionada.";
+    renderDates(D(selected));
+  });
+  dtList.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-rm-dt]"); if (!b || !selected) return;
+    setOv(selected, { datas: D(selected).datas.filter((_, i) => i !== +b.dataset.rmDt) });
+    dtMsg.textContent = "Data removida.";
+    renderDates(D(selected));
+  });
   document.getElementById("d-pre").addEventListener("click", (e) => { const b = e.target.closest("[data-rm]"); if (!b) return; setOv(selected, { pre: D(selected).pre.filter((p) => p !== b.dataset.rm) }); render(); });
   dAdd.addEventListener("change", () => { if (!dAdd.value) return; setOv(selected, { pre: D(selected).pre.concat(dAdd.value) }); render(); });
-  document.getElementById("d-reset").addEventListener("click", () => { if (!selected) return; delete S.ov[selected]; scheduleSave(); openDrawer(selected); render(); });
+  document.getElementById("d-reset").addEventListener("click", () => { if (!selected) return; const datas = D(selected).datas; delete S.ov[selected]; if (datas.length) S.ov[selected] = { datas }; scheduleSave(); openDrawer(selected); render(); });
   document.getElementById("d-close").addEventListener("click", closeDrawer);
   scrim.addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !drawer.hidden) closeDrawer(); });
@@ -507,7 +621,7 @@ plano abaixo   = ${left} sem.</div>
     }
     resetArmed = false; bReset.textContent = "Restaurar tudo como no PDF";
     const cfg = S.cfg; S = freshState(); S.cfg = cfg; scheduleSave(); render();
-    msg.textContent = "Situações, notas e anotações voltaram ao estado do PDF.";
+    msg.textContent = "Situações, notas, anotações e datas voltaram ao estado do PDF.";
   });
 
   // PWA: service worker (modo offline) e botão "Instalar app"

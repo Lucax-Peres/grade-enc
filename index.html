@@ -48,10 +48,18 @@
   <section class="pane" id="pane-resumo" data-pane="resumo">
     <div class="hoursbar" id="hoursbar" aria-label="Progresso em horas"><span class="hb-done"></span><span class="hb-cur"></span><span class="hb-plan"></span></div>
     <div class="stats" id="stats"></div>
+    <div class="panel crhist" id="crhist" hidden></div>
     <div class="install" id="install" hidden>
       <span id="install-txt">Instale a Grade ENC no celular para abrir como um app, mesmo sem internet.</span>
       <button class="btn primary" id="b-install" hidden>Instalar app</button>
     </div>
+  </section>
+
+  <!-- O QUE POSSO CURSAR -->
+  <section class="pane" id="pane-next" data-pane="resumo">
+    <div class="sechead"><div><div class="eyebrow">Com base nos pré-requisitos</div><h2>O que posso cursar agora</h2></div></div>
+    <div class="nextgrid" id="next"></div>
+    <p class="hint">Vêm primeiro as que faltam para algo que você já está cursando e as que destravam mais matérias; no empate, as de semestres anteriores. O app não sabe quais são ofertadas neste período: confira na oferta do seu curso.</p>
   </section>
 
   <!-- GRADE -->
@@ -144,6 +152,17 @@
     <button type="button" data-v="feita">Concluída</button><button type="button" data-v="cursando">Cursando</button><button type="button" data-v="planejada">Planejada</button><button type="button" data-v="pendente">Pendente</button>
   </div>
   <div id="d-alert"></div>
+  <div class="field">
+    <label for="d-dt-data">Provas e trabalhos</label>
+    <ul class="dlist" id="d-datas"></ul>
+    <form class="dform" id="d-dt-form" novalidate>
+      <select id="d-dt-tipo" aria-label="Tipo"><option value="prova">Prova</option><option value="trabalho">Trabalho</option></select>
+      <input type="date" id="d-dt-data" aria-label="Data">
+      <input type="text" id="d-dt-titulo" maxlength="80" placeholder="Descrição (opcional): P1, Lista 3…" aria-label="Descrição">
+      <button type="submit" class="btn">Adicionar</button>
+    </form>
+    <small id="d-dt-msg" role="status"></small>
+  </div>
   <div class="two">
     <div class="field"><label for="d-sem" id="d-sem-l">Semestre</label><input type="text" id="d-sem" class="mono" placeholder="2025/2" inputmode="numeric"></div>
     <div class="field"><label for="d-nota">Nota final</label><input type="number" id="d-nota" class="mono" min="0" max="10" step="0.1" placeholder="0–10" inputmode="decimal"></div>
