@@ -13,7 +13,7 @@ grade-enc/
 │   └── app.js              # lógica: fluxograma, lista, previsão, edição, salvamento
 ├── manifest.webmanifest    # dados do app instalável (nome, ícones, cores)
 ├── sw.js                   # service worker (modo offline)
-├── icons/                  # ícones do app
+├── icons/                  # logo.svg (original da logo) e ícones PNG gerados a partir dele
 ├── vercel.json             # cabeçalhos HTTP para o Vercel
 └── .gitignore
 ```

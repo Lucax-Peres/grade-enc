@@ -6,7 +6,7 @@
  * IMPORTANTE: ao publicar mudanças, aumente o número da versão abaixo
  * (v1 → v2 …) para o celular descartar o cache antigo.
  */
-const CACHE = "grade-enc-v1";
+const CACHE = "grade-enc-v2";
 const SHELL = [
   "./",
   "./index.html",
@@ -14,6 +14,9 @@ const SHELL = [
   "./assets/data.js",
   "./assets/app.js",
   "./manifest.webmanifest",
+  "./icons/logo.svg",
+  "./icons/favicon-32.png",
+  "./icons/apple-touch-icon.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];
