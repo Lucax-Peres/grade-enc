@@ -675,8 +675,9 @@ plano abaixo   = ${left} sem.</div>
   /** Coloca uma linha da rota "disciplinas" no mesmo formato do boletim. */
   function disciplinaParaBoletim(d) {
     const sit = d.situacao, medias = Array.isArray(d.medias) ? d.medias : [];
-    const validas = medias.filter((m) => m && suapNota(m.nota) != null);
-    const media = validas.find((m) => /final/i.test(m.tipo || "")) || validas[validas.length - 1];
+    // MFD = média final da disciplina; MD = média antes da avaliação final; NAF = nota só da avaliação final, nunca usada como média.
+    const validas = medias.filter((m) => m && suapNota(m.nota) != null && !/^naf$/i.test(String(m.tipo || "").trim()));
+    const media = validas.find((m) => /^mfd$/i.test(String(m.tipo || "").trim())) || validas.find((m) => /final/i.test(m.tipo || "")) || validas.find((m) => /^md$/i.test(String(m.tipo || "").trim())) || validas[validas.length - 1];
     return { codigo_diario: d.id, disciplina: d.descricao || d.sigla, situacao: sit && typeof sit === "object" ? sit.rotulo || sit.status : sit,
       carga_horaria: d.ch_total_aula, numero_faltas: d.qtd_faltas, percentual_carga_horaria_frequentada: d.frequencia,
       media_final_disciplina: media ? media.nota : null, tiposMedia: medias.map((m) => m && m.tipo).filter(Boolean) };
