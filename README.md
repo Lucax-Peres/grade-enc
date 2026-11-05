@@ -112,6 +112,7 @@ A aba **Matrículas** lê suas matérias, horários e salas pela API oficial do 
 | Quero… | Onde mexer |
 |---|---|
 | Corrigir um pré-requisito ou o nome/horas de uma disciplina | `assets/data.js` |
+| Ajustar a hora de cada aula do campus | `AULAS` em `assets/data.js` |
 | Mudar cores ou fontes | `:root` no topo de `assets/style.css` |
 | Mudar a regra do plano de semestres | função `computePlan()` em `assets/app.js` |
 | Publicar uma mudança e garantir que o celular pegue | aumente `CACHE = "grade-enc-v1"` → `v2` em `sw.js` |

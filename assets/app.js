@@ -683,7 +683,18 @@ plano abaixo   = ${left} sem.</div>
       const keys = periodos.map(suapKey);
       const key = keys.includes(wanted) ? wanted : keys.includes(S.cfg.atual) ? S.cfg.atual : keys[0];
       const [ano, per] = key.split("/");
-      const turmas = await suapAll(`/ensino/minhas-turmas-virtuais/${ano}/${per}/`);
+      const turmasBase = await suapAll(`/ensino/minhas-turmas-virtuais/${ano}/${per}/`);
+      // De cada turma guardamos só nomes de professores e locais; colegas e contatos não são salvos.
+      const nomeProf = (x) => (typeof x === "string" ? x : x && (x.nome_usual || x.nome)) || "";
+      const turmas = await Promise.all(turmasBase.map(async (t) => {
+        if (t.id == null || t.id === "") return t;
+        try {
+          const det = await suapGet(`/ensino/minha-turma-virtual/${encodeURIComponent(t.id)}/`);
+          const professores = (Array.isArray(det.professores) ? det.professores : []).map(nomeProf).filter(Boolean);
+          const locais = Array.isArray(t.locais_de_aula) && t.locais_de_aula.filter(Boolean).length ? t.locais_de_aula : Array.isArray(det.locais_de_aula) ? det.locais_de_aula : [];
+          return Object.assign({}, t, { professores, locais_de_aula: locais });
+        } catch (e) { if (e.kind === "auth") throw e; return t; }
+      }));
       // Boletim e avaliações são complementos: se falharem, as matérias ainda aparecem.
       const [bol, ava] = await Promise.allSettled([suapAll(`/ensino/meu-boletim/${ano}/${per}/`), suapAll("/ensino/minhas-proximas-avaliacoes/")]);
       const trab = await Promise.allSettled(turmas.filter((t) => t.id != null && t.id !== "").map(async (t) =>
@@ -692,7 +703,10 @@ plano abaixo   = ${left} sem.</div>
       // A documentação não diz como escrever o semestre nesta rota, então tentamos os formatos comuns.
       let diarios = [], diariosFmt = null;
       for (const fmt of [ano + "." + per, ano + per, ano + "-" + per]) {
-        try { const r = await suapAll(`/ensino/diarios/${encodeURIComponent(fmt)}/`); if (r.length) { diarios = r; diariosFmt = fmt.replace(/\d/g, "9"); break; } }
+        try { const r = await suapAll(`/ensino/diarios/${encodeURIComponent(fmt)}/`); if (r.length) {
+            diarios = r.map((d) => ({ id: d.id, disciplina: d.disciplina ? { descricao: d.disciplina.descricao, nome: d.disciplina.nome } : null, horarios: d.horarios, local: d.local, laboratorio: d.laboratorio, professores: (Array.isArray(d.professores) ? d.professores : []).map(nomeProf).filter(Boolean) }));
+            diariosFmt = fmt.replace(/\d/g, "9"); break;
+          } }
         catch (e) { if (e.kind === "auth") throw e; }
       }
       suap.data = { atualizadoEm: new Date().toISOString(), periodos: keys, periodo: key, turmas,
@@ -759,8 +773,16 @@ plano abaixo   = ${left} sem.</div>
     if (a.length === 2) return a[0] + "ª e " + a[1] + "ª aulas";
     return a.every((x, i) => !i || x === a[i - 1] + 1) ? a[0] + "ª a " + a[a.length - 1] + "ª aulas" : a.map((x) => x + "ª").join(", ") + " aulas";
   }
-  const tabelaAulas = () => (S.cfg.aulas && typeof S.cfg.aulas === "object" ? S.cfg.aulas : {});
   const horaValida = (v) => typeof v === "string" && /^\d{2}:\d{2}$/.test(v);
+  /** Horários do campus (data.js); o que você preencher no app tem prioridade. */
+  function tabelaAulas() {
+    const meu = S.cfg.aulas && typeof S.cfg.aulas === "object" ? S.cfg.aulas : {}, out = {};
+    new Set([...Object.keys(GRADE.AULAS || {}), ...Object.keys(meu)]).forEach((k) => {
+      const m = Array.isArray(meu[k]) ? meu[k] : [], p = (GRADE.AULAS || {})[k] || [];
+      out[k] = [0, 1].map((i) => (horaValida(m[i]) ? m[i] : p[i] || ""));
+    });
+    return out;
+  }
   function relogio(turno, aulas) {
     const t = tabelaAulas(), ini = (t[turno + aulas[0]] || [])[0], fim = (t[turno + aulas[aulas.length - 1]] || [])[1];
     return horaValida(ini) && horaValida(fim) ? ini + "–" + fim : "";
@@ -775,26 +797,72 @@ plano abaixo   = ${left} sem.</div>
     const l = suap.data && Array.isArray(suap.data.diarios) ? suap.data.diarios : [];
     return l.find((d) => String(d.id) === String(t.id)) || l.find((d) => { const n = d.disciplina && (d.disciplina.descricao || d.disciplina.nome); return n && nameTokens(n) === nameTokens(t.descricao); }) || null;
   };
-  const nomeLocal = (x) => (!x ? "" : typeof x === "string" ? x : x.descricao || x.nome || x.sala || "");
+  const nomeLocal = (x) => (!x ? "" : typeof x === "string" ? x : x.sala || x.descricao || x.nome || "");
+  function infoTurma(t) {
+    const d = diarioDa(t);
+    const locais = Array.isArray(t.locais_de_aula) ? t.locais_de_aula.filter(Boolean) : [];
+    const local = locais.length ? locais.join(" · ") : d ? [nomeLocal(d.local), nomeLocal(d.laboratorio)].filter(Boolean).join(" · ") : "";
+    const profs = Array.isArray(t.professores) && t.professores.length ? t.professores : d && Array.isArray(d.professores) ? d.professores : [];
+    return { local, prof: profs.filter((x) => typeof x === "string").join(", ") };
+  }
+  /** Tabela no formato do SUAP, com aulas seguidas da mesma matéria unidas em um só bloco. */
+  function gradeHorariaHtml(turmas) {
+    const cel = {}, usados = {}, diasUsados = new Set([2, 3, 4, 5, 6]);
+    let tem = false;
+    turmas.forEach((t) => {
+      const a = aulasDaTurma(t); if (a.doSuap) return;
+      a.itens.forEach((x) => x.aulas.forEach((n) => {
+        tem = true; diasUsados.add(x.dia);
+        (usados[x.turno] = usados[x.turno] || new Set()).add(n);
+        const k = x.turno + n + "|" + x.dia; (cel[k] = cel[k] || []).push(t);
+      }));
+    });
+    if (!tem) return "";
+    const dias = [...diasUsados].sort((a, b) => a - b), hoje = new Date().getDay() + 1, tab = tabelaAulas();
+    const bloco = (t, turno, ini, fim) => {
+      const code = suapMatch(t.descricao), info = infoTurma(t), hora = relogio(turno, [ini, fim]) || (ini === fim ? ini + "ª aula" : ini + "ª a " + fim + "ª aula");
+      const inner = `<span class="suhora">${esc(hora)}</span><span class="sunome">${esc(t.descricao || t.sigla || "Matéria")}</span>${info.prof ? `<small>${esc(info.prof)}</small>` : ""}${info.local ? `<small>${esc(info.local)}</small>` : ""}`;
+      return code ? `<button type="button" class="tbloco" data-open="${code}">${inner}</button>` : `<div class="tbloco">${inner}</div>`;
+    };
+    const corpo = Object.keys(usados).sort((a, b) => TURNO_ORD[a] - TURNO_ORD[b]).map((turno) => {
+      const ns = [...usados[turno]], min = Math.min(...ns), max = Math.max(...ns), pular = new Set();
+      let linhas = "";
+      for (let n = min; n <= max; n++) {
+        const h = tab[turno + n], rot = horaValida(h && h[0]) && horaValida(h && h[1]) ? h[0] + " – " + h[1] : n + "ª aula";
+        linhas += `<tr><th scope="row" class="mono">${rot}</th>` + dias.map((dia) => {
+          const k = n + "|" + dia; if (pular.has(k)) return "";
+          const aqui = cel[turno + n + "|" + dia] || [], cls = dia === hoje ? ' class="hoje"' : "";
+          if (!aqui.length) return `<td${cls}></td>`;
+          if (aqui.length > 1) return `<td${cls}>${aqui.map((t) => bloco(t, turno, n, n)).join("")}</td>`;
+          let fim = n;
+          while (fim < max && (cel[turno + (fim + 1) + "|" + dia] || []).length === 1 && cel[turno + (fim + 1) + "|" + dia][0] === aqui[0]) { fim++; pular.add(fim + "|" + dia); }
+          return `<td${cls}${fim > n ? ` rowspan="${fim - n + 1}"` : ""}>${bloco(aqui[0], turno, n, fim)}</td>`;
+        }).join("") + "</tr>";
+      }
+      return `<tbody><tr class="suturno"><th colspan="${dias.length + 1}" scope="colgroup">${TURNOS[turno]}</th></tr>${linhas}</tbody>`;
+    }).join("");
+    return `<div class="sutablewrap"><table class="sutable"><thead><tr><th scope="col">Horário</th>${dias.map((d) => `<th scope="col"${d === hoje ? ' class="hoje"' : ""}>${DIAS[d]}${d === hoje ? " · hoje" : ""}</th>`).join("")}</tr></thead>${corpo}</table></div>`;
+  }
   /** Aulas de uma matéria. Usa o horário de relógio do SUAP, se vier; senão, o código e a sua tabela. */
   function aulasDaTurma(t) {
     const d = diarioDa(t);
     const api = (d && Array.isArray(d.horarios) ? d.horarios : []).map((h) => ({ dia: diaCodigo(h && h.dia), hora: h && h.horario })).filter((h) => h.dia && CLOCK_RE.test(h.hora || ""));
     const cod = parseHorarios(t.horarios_de_aula);
-    if (api.length) return { itens: api.map((h) => ({ dia: h.dia, relogio: String(h.hora), detalhe: "", ord: String(h.hora) })), brutos: [], doSuap: true };
+    const coberto = cod.itens.length && cod.itens.every((x) => relogio(x.turno, x.aulas));
+    if (api.length && !coberto) return { itens: api.map((h) => ({ dia: h.dia, relogio: String(h.hora), detalhe: "", ord: String(h.hora) })), brutos: [], doSuap: true };
     return { itens: cod.itens.map((x) => ({ dia: x.dia, turno: x.turno, aulas: x.aulas, relogio: relogio(x.turno, x.aulas), detalhe: TURNOS[x.turno] + " · " + aulasTxt(x.aulas), ord: TURNO_ORD[x.turno] + "-" + String(x.aulas[0]).padStart(2, "0") })), brutos: cod.brutos, doSuap: false };
   }
   function semanaHtml(turmas) {
     const porDia = {};
     turmas.forEach((t) => {
-      const code = suapMatch(t.descricao), d = diarioDa(t), locais = (Array.isArray(t.locais_de_aula) ? t.locais_de_aula.filter(Boolean) : []);
-      const local = locais.length ? locais.join(" · ") : d ? [nomeLocal(d.local), nomeLocal(d.laboratorio)].filter(Boolean).join(" · ") : "";
-      aulasDaTurma(t).itens.forEach((x) => (porDia[x.dia] = porDia[x.dia] || []).push(Object.assign({ nome: t.descricao || t.sigla || "Matéria", code, local }, x)));
+      const code = suapMatch(t.descricao), info = infoTurma(t);
+      aulasDaTurma(t).itens.forEach((x) => (porDia[x.dia] = porDia[x.dia] || []).push(Object.assign({ nome: t.descricao || t.sigla || "Matéria", code, local: info.local, prof: info.prof }, x)));
     });
     const dias = Object.keys(porDia).map(Number).sort((a, b) => a - b); if (!dias.length) return "";
     const hoje = new Date().getDay() + 1;
-    return `<div class="suweek">${dias.map((dia) => `<div class="sudia${dia === hoje ? " hoje" : ""}"><h3>${DIAS[dia]}${dia === hoje ? '<span class="eyebrow">hoje</span>' : ""}</h3>${porDia[dia].sort((a, b) => a.ord.localeCompare(b.ord)).map((x) => {
-      const inner = `<span class="suhora">${esc(x.relogio || x.detalhe)}</span><span class="sunome">${esc(x.nome)}</span>${x.relogio && x.detalhe ? `<small>${esc(x.detalhe)}</small>` : ""}${x.local ? `<small>${esc(x.local)}</small>` : ""}`;
+    const tudoNaTabela = !turmas.some((t) => aulasDaTurma(t).doSuap);
+    return `<div class="suweek${tudoNaTabela ? " sotelapequena" : ""}">${dias.map((dia) => `<div class="sudia${dia === hoje ? " hoje" : ""}"><h3>${DIAS[dia]}${dia === hoje ? '<span class="eyebrow">hoje</span>' : ""}</h3>${porDia[dia].sort((a, b) => a.ord.localeCompare(b.ord)).map((x) => {
+      const inner = `<span class="suhora">${esc(x.relogio || x.detalhe)}</span><span class="sunome">${esc(x.nome)}</span>${x.relogio && x.detalhe ? `<small>${esc(x.detalhe)}</small>` : ""}${x.prof ? `<small>${esc(x.prof)}</small>` : ""}${x.local ? `<small>${esc(x.local)}</small>` : ""}`;
       return x.code ? `<button type="button" class="suaula" data-open="${x.code}">${inner}</button>` : `<div class="suaula">${inner}</div>`;
     }).join("")}</div>`).join("")}</div>`;
   }
@@ -803,10 +871,11 @@ plano abaixo   = ${left} sem.</div>
     const slots = new Set();
     turmas.forEach((t) => { const a = aulasDaTurma(t); if (!a.doSuap) a.itens.forEach((x) => x.aulas.forEach((n) => slots.add(x.turno + n))); });
     if (!slots.size) return "";
-    const t = tabelaAulas(), lista = [...slots].sort((a, b) => TURNO_ORD[a[0]] - TURNO_ORD[b[0]] || +a.slice(1) - +b.slice(1));
-    const faltam = lista.filter((k) => !horaValida((t[k] || [])[0]) || !horaValida((t[k] || [])[1])).length;
+    const t = tabelaAulas();
+    const lista = [...slots].filter((k) => !horaValida((t[k] || [])[0]) || !horaValida((t[k] || [])[1])).sort((a, b) => TURNO_ORD[a[0]] - TURNO_ORD[b[0]] || +a.slice(1) - +b.slice(1));
+    if (!lista.length) return "";
     const aberto = suapTimesOpen;
-    return `<details class="panel sutimes" id="su-times"${aberto ? " open" : ""}><summary>Horários de relógio das aulas <span class="msg">${faltam ? faltam + " de " + lista.length + " por preencher" : "preenchidos"}</span></summary>
+    return `<details class="panel sutimes" id="su-times"${aberto ? " open" : ""}><summary>Horários de relógio das aulas <span class="msg">${lista.length} por preencher</span></summary>
       <p class="msg">O SUAP informa turno e número da aula. Preencha uma vez com o horário do seu campus para ver a hora de cada aula.</p>
       <div class="sutimegrid">${lista.map((k) => `<div class="sutime"><span>${TURNOS[k[0]]} · ${k.slice(1)}ª aula</span><input type="time" data-slot="${k}" data-i="0" value="${esc(horaValida((t[k] || [])[0]) ? t[k][0] : "")}" aria-label="Início: ${TURNOS[k[0]]}, ${k.slice(1)}ª aula"><input type="time" data-slot="${k}" data-i="1" value="${esc(horaValida((t[k] || [])[1]) ? t[k][1] : "")}" aria-label="Fim: ${TURNOS[k[0]]}, ${k.slice(1)}ª aula"></div>`).join("")}</div>
     </details>`;
@@ -885,7 +954,7 @@ plano abaixo   = ${left} sem.</div>
     const chaves = (l) => [...new Set(lst(l).flatMap((x) => Object.keys(x || {})))];
     return JSON.stringify({
       periodos: lst(d.periodos).length, rotas: d.rotas || null,
-      turmas: { total: lst(d.turmas).length, campos: chaves(d.turmas), comParNaGrade: lst(d.turmas).filter((t) => suapMatch(t.descricao)).length, horarios: uniq(lst(d.turmas).map((t) => mask(t.horarios_de_aula))), siglas: uniq(lst(d.turmas).map((t) => mask(t.sigla))) },
+      turmas: { total: lst(d.turmas).length, campos: chaves(d.turmas), comParNaGrade: lst(d.turmas).filter((t) => suapMatch(t.descricao)).length, comProfessor: lst(d.turmas).filter((t) => infoTurma(t).prof).length, comLocal: lst(d.turmas).filter((t) => infoTurma(t).local).length, horarios: uniq(lst(d.turmas).map((t) => mask(t.horarios_de_aula))), siglas: uniq(lst(d.turmas).map((t) => mask(t.sigla))) },
       boletim: { total: lst(d.boletim).length, campos: chaves(d.boletim), situacoes: uniq(lst(d.boletim).map((b) => b.situacao)), medias: uniq(lst(d.boletim).map((b) => mask(b.media_final_disciplina))), cargas: uniq(lst(d.boletim).map((b) => b.carga_horaria)) },
       avaliacoes: { total: lst(d.avaliacoes).length, campos: chaves(d.avaliacoes), tipos: uniq(lst(d.avaliacoes).map((a) => a.tipo)), datas: uniq(lst(d.avaliacoes).map((a) => mask(a.data))), comPar: suapEvents().filter((e) => e.code && e.tipo !== "Trabalho").length },
       diarios: { total: lst(d.diarios).length, campos: chaves(d.diarios), dias: uniq(lst(d.diarios).flatMap((x) => lst(x.horarios).map((h) => h && h.dia))), horarios: uniq(lst(d.diarios).flatMap((x) => lst(x.horarios).map((h) => mask(h && h.horario)))), camposLocal: chaves(lst(d.diarios).map((x) => (x.local && typeof x.local === "object" ? x.local : {}))), camposDisciplina: chaves(lst(d.diarios).map((x) => (x.disciplina && typeof x.disciplina === "object" ? x.disciplina : {}))) },
@@ -914,14 +983,14 @@ plano abaixo   = ${left} sem.</div>
       const code = suapMatch(t.descricao); if (code) found.add(code);
       const b = boletim.find((x) => (x.codigo_diario != null && String(x.codigo_diario) === String(t.id)) || (x.disciplina && nameTokens(x.disciplina) === nameTokens(t.descricao)));
       const dd = code ? D(code) : null;
-      const dia = diarioDa(t);
-      const locais = (Array.isArray(t.locais_de_aula) ? t.locais_de_aula.filter(Boolean).join(" · ") : "") || (dia ? [nomeLocal(dia.local), nomeLocal(dia.laboratorio)].filter(Boolean).join(" · ") : "");
+      const info = infoTurma(t), locais = info.local;
       const aulasT = aulasDaTurma(t);
       const horarioLinhas = aulasT.itens.slice().sort((a, b) => a.dia - b.dia || a.ord.localeCompare(b.ord)).map((x) => `<span class="suinfo"><b>${DIAS[x.dia]}</b> ${esc([x.relogio, x.detalhe].filter(Boolean).join(" · "))}</span>`).join("")
         + aulasT.brutos.map((b) => `<span class="suinfo"><b>Horário</b> ${esc(b)}</span>`).join("");
       const inner = `<span class="suname">${esc(t.descricao || t.sigla || "Matéria sem nome")}</span>
         <span class="sucode mono">${code ? "ENC-" + code : "Sem par na grade"}${t.sigla ? " · " + esc(t.sigla) : ""}</span>
         ${horarioLinhas}
+        ${info.prof ? `<span class="suinfo"><b>Professor</b> ${esc(info.prof)}</span>` : ""}
         ${locais ? `<span class="suinfo"><b>Local</b> ${esc(locais)}</span>` : ""}
         ${faltasHtml(b)}
         ${b && b.situacao ? `<span class="suinfo"><b>Situação</b> ${esc(b.situacao)}</span>` : ""}
@@ -939,6 +1008,7 @@ plano abaixo   = ${left} sem.</div>
         <span class="msg">${isNaN(when) ? "" : "Atualizado em " + when.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span>
       </div>
       ${suapDiffHtml()}
+      ${gradeHorariaHtml(turmas)}
       ${semanaHtml(turmas)}
       ${tabelaHtml(turmas)}
       ${turmas.length ? `<h3 class="suh">Matérias</h3><div class="sugrid">${cards}</div>` : '<div class="empty">O SUAP não retornou matérias neste período.</div>'}
