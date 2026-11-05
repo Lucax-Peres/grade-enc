@@ -6,7 +6,7 @@
  * IMPORTANTE: ao publicar mudanças, aumente o número da versão abaixo
  * (v1 → v2 …) para o celular descartar o cache antigo.
  */
-const CACHE = "grade-enc-v8";
+const CACHE = "grade-enc-v9";
 const SHELL = [
   "./",
   "./index.html",

@@ -672,6 +672,24 @@ plano abaixo   = ${left} sem.</div>
   }
   const suapKey = (x) => x.ano_letivo + "/" + x.periodo_letivo;
 
+  /** Coloca uma linha da rota "disciplinas" no mesmo formato do boletim. */
+  function disciplinaParaBoletim(d) {
+    const sit = d.situacao, medias = Array.isArray(d.medias) ? d.medias : [];
+    const validas = medias.filter((m) => m && suapNota(m.nota) != null);
+    const media = validas.find((m) => /final/i.test(m.tipo || "")) || validas[validas.length - 1];
+    return { codigo_diario: d.id, disciplina: d.descricao || d.sigla, situacao: sit && typeof sit === "object" ? sit.rotulo || sit.status : sit,
+      carga_horaria: d.ch_total_aula, numero_faltas: d.qtd_faltas, percentual_carga_horaria_frequentada: d.frequencia,
+      media_final_disciplina: media ? media.nota : null, tiposMedia: medias.map((m) => m && m.tipo).filter(Boolean) };
+  }
+  /** O boletim pode responder com erro no SUAP; por isso a rota "disciplinas" vem primeiro. */
+  async function suapBoletim(ano, per) {
+    try {
+      const r = await suapAll(`/ensino/disciplinas/${ano}.${per}/`);
+      if (r.length) return { linhas: r.map(disciplinaParaBoletim), fonte: "disciplinas" };
+    } catch (e) { if (e.kind === "auth") throw e; }
+    return { linhas: await suapAll(`/ensino/meu-boletim/${ano}/${per}/`), fonte: "boletim" };
+  }
+
   async function suapSync(wanted) {
     if (suapBusy) return;
     suapBusy = true; suMsg.textContent = "Atualizando dados do SUAP…"; renderSuap();
@@ -696,7 +714,7 @@ plano abaixo   = ${left} sem.</div>
         } catch (e) { if (e.kind === "auth") throw e; return t; }
       }));
       // Boletim e avaliações são complementos: se falharem, as matérias ainda aparecem.
-      const [bol, ava] = await Promise.allSettled([suapAll(`/ensino/meu-boletim/${ano}/${per}/`), suapAll("/ensino/minhas-proximas-avaliacoes/")]);
+      const [bol, ava] = await Promise.allSettled([suapBoletim(ano, per), suapAll("/ensino/minhas-proximas-avaliacoes/")]);
       const trab = await Promise.allSettled(turmas.filter((t) => t.id != null && t.id !== "").map(async (t) =>
         (await suapAll(`/ensino/diarios/${encodeURIComponent(t.id)}/trabalhos/`)).map((x) => Object.assign({}, x, { turma: t.descricao || "" }))));
       const stat = (r) => (r.status === "fulfilled" ? "ok" : (r.reason && r.reason.status) || "falha");
@@ -710,9 +728,9 @@ plano abaixo   = ${left} sem.</div>
         catch (e) { if (e.kind === "auth") throw e; }
       }
       suap.data = { atualizadoEm: new Date().toISOString(), periodos: keys, periodo: key, turmas,
-        boletim: bol.status === "fulfilled" ? bol.value : [], avaliacoes: ava.status === "fulfilled" ? ava.value : [],
+        boletim: bol.status === "fulfilled" ? bol.value.linhas : [], avaliacoes: ava.status === "fulfilled" ? ava.value : [],
         trabalhos: trab.flatMap((r) => (r.status === "fulfilled" ? r.value : [])), diarios,
-        rotas: { boletim: stat(bol), avaliacoes: stat(ava), trabalhos: trab.map(stat), diarios: diariosFmt || "sem dados" } };
+        rotas: { boletim: stat(bol), fonteBoletim: bol.status === "fulfilled" ? bol.value.fonte : null, avaliacoes: stat(ava), trabalhos: trab.map(stat), diarios: diariosFmt || "sem dados" } };
       suapSave();
       suMsg.textContent = "";
     } catch (e) {
@@ -937,7 +955,7 @@ plano abaixo   = ${left} sem.</div>
       let ultimoErro = null;
       for (let i = 0; i < keys.length; i++) {
         suMsg.textContent = "Lendo boletim " + (i + 1) + " de " + keys.length + "…";
-        try { (await suapAll("/ensino/meu-boletim/" + keys[i] + "/")).forEach((r) => linhas.push({ r, periodo: keys[i] })); }
+        try { const [ano, per] = keys[i].split("/"); (await suapBoletim(ano, per)).linhas.forEach((r) => linhas.push({ r, periodo: keys[i] })); }
         catch (e) { if (e.kind === "auth") throw e; falhas.push(keys[i]); ultimoErro = e; }
       }
       if (falhas.length === keys.length) throw ultimoErro; // sem nenhum boletim lido, não há o que comparar
@@ -992,7 +1010,7 @@ plano abaixo   = ${left} sem.</div>
     return JSON.stringify({
       periodos: lst(d.periodos).length, rotas: d.rotas || null,
       turmas: { total: lst(d.turmas).length, campos: chaves(d.turmas), comParNaGrade: lst(d.turmas).filter((t) => suapMatch(t.descricao)).length, comProfessor: lst(d.turmas).filter((t) => infoTurma(t).prof).length, comLocal: lst(d.turmas).filter((t) => infoTurma(t).local).length, horarios: uniq(lst(d.turmas).map((t) => mask(t.horarios_de_aula))), siglas: uniq(lst(d.turmas).map((t) => mask(t.sigla))) },
-      boletim: { total: lst(d.boletim).length, campos: chaves(d.boletim), situacoes: uniq(lst(d.boletim).map((b) => b.situacao)), medias: uniq(lst(d.boletim).map((b) => mask(b.media_final_disciplina))), cargas: uniq(lst(d.boletim).map((b) => b.carga_horaria)) },
+      boletim: { total: lst(d.boletim).length, campos: chaves(d.boletim), situacoes: uniq(lst(d.boletim).map((b) => b.situacao)), medias: uniq(lst(d.boletim).map((b) => mask(b.media_final_disciplina))), tiposMedia: uniq(lst(d.boletim).flatMap((b) => lst(b.tiposMedia))), cargas: uniq(lst(d.boletim).map((b) => b.carga_horaria)), comFaltas: lst(d.boletim).filter((b) => b.numero_faltas != null).length, ligadasATurma: lst(d.turmas).filter((t) => lst(d.boletim).some((x) => String(x.codigo_diario) === String(t.id) || (x.disciplina && suapMatch(x.disciplina) && suapMatch(x.disciplina) === suapMatch(t.descricao)))).length },
       avaliacoes: { total: lst(d.avaliacoes).length, campos: chaves(d.avaliacoes), tipos: uniq(lst(d.avaliacoes).map((a) => a.tipo)), datas: uniq(lst(d.avaliacoes).map((a) => mask(a.data))), comPar: suapEvents().filter((e) => e.code && e.tipo !== "Trabalho").length },
       diarios: { total: lst(d.diarios).length, campos: chaves(d.diarios), dias: uniq(lst(d.diarios).flatMap((x) => lst(x.horarios).map((h) => h && h.dia))), horarios: uniq(lst(d.diarios).flatMap((x) => lst(x.horarios).map((h) => mask(h && h.horario)))), camposLocal: chaves(lst(d.diarios).map((x) => (x.local && typeof x.local === "object" ? x.local : {}))), camposDisciplina: chaves(lst(d.diarios).map((x) => (x.disciplina && typeof x.disciplina === "object" ? x.disciplina : {}))) },
       trabalhos: { total: lst(d.trabalhos).length, campos: chaves(d.trabalhos), datas: uniq(lst(d.trabalhos).map((t) => mask(t.data_limite))) },
@@ -1019,7 +1037,7 @@ plano abaixo   = ${left} sem.</div>
     const found = new Set();
     const cards = turmas.map((t) => {
       const code = suapMatch(t.descricao); if (code) found.add(code);
-      const b = boletim.find((x) => (x.codigo_diario != null && String(x.codigo_diario) === String(t.id)) || (x.disciplina && nameTokens(x.disciplina) === nameTokens(t.descricao)));
+      const b = boletim.find((x) => (x.codigo_diario != null && String(x.codigo_diario) === String(t.id)) || (x.disciplina && (nameTokens(x.disciplina) === nameTokens(t.descricao) || (code && suapMatch(x.disciplina) === code))));
       const dd = code ? D(code) : null;
       const info = infoTurma(t), locais = info.local;
       const aulasT = aulasDaTurma(t);
