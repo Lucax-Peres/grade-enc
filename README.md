@@ -105,6 +105,8 @@ O ícone "Grade ENC" aparece na tela inicial e abre em tela cheia, como um app.
 
 A aba **Matrículas** lê suas matérias, horários e salas pela API oficial do SUAP do IFMT, direto do navegador, sem servidor no meio. A senha só é usada no login e não é salva. O token de renovação e os dados ficam em `localStorage` (`grade-enc-suap`), fora do backup em JSON e fora deste repositório. **Desconectar** apaga tudo do aparelho.
 
+**Comparar com a grade** lê o boletim de todos os períodos e propõe mudanças de situação, nota e semestre, que só valem depois da sua aprovação. O alerta de faltas usa o limite do IFMT: 75% de frequência, ou até 25% da carga horária em faltas.
+
 ## 5. Como fazer mudanças comuns
 
 | Quero… | Onde mexer |

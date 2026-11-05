@@ -82,6 +82,19 @@ button.sucard{cursor:pointer}button.sucard:hover{border-color:var(--accent)}
 .suinfo b{font-weight:600;color:var(--muted);margin-right:4px}
 .suh{font-size:16px;font-weight:700;font-stretch:90%;margin-bottom:6px}
 .suavs{max-width:640px}
+.dsrc{font-family:var(--f-mono);font-size:10px;color:var(--muted);justify-self:center}
+.ditem{grid-template-columns:68px 1fr minmax(28px,auto)}
+.sudiffs{max-width:760px;gap:10px}
+.sudiffs .msg{margin:0}
+.sudifflist{display:grid;gap:6px;max-height:420px;overflow-y:auto}
+.sudiff{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;background:var(--paper);overflow-wrap:anywhere}
+.sudiff input{margin-top:3px;accent-color:var(--accent)}
+.sudiff span{display:grid;min-width:0}
+.sudiff b{font-size:13.5px;font-weight:600}
+.sudiff small{color:var(--muted);font-size:12px}
+.sudiag{display:grid;gap:6px;min-width:0}
+.sudiag .msg{margin:0}
+.sudiag pre{margin:0;max-height:320px;overflow:auto}
 .ditem.suav{grid-template-columns:82px 1fr}
 .install{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--card);border:1px dashed var(--accent);border-radius:10px;padding:12px 14px;font-size:14px}
 

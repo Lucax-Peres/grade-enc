@@ -452,16 +452,16 @@ plano abaixo   = ${left} sem.</div>
   }
   const relDay = (n) => n === 0 ? "hoje" : n === 1 ? "amanhã" : n === -1 ? "ontem" : n > 1 ? "em " + n + " dias" : "há " + -n + " dias";
   function renderDates(d) {
-    const items = d.datas.map((x, i) => {
+    const items = (d.datas.map((x, i) => {
       const t = x && parseDay(x.data);
       return t ? { i, t, n: daysUntil(t), tipo: x.tipo === "trabalho" ? "Trabalho" : "Prova", titulo: x.titulo || "" } : null;
-    }).filter(Boolean);
+    }).filter(Boolean).concat(suapEvents().filter((x) => x.code === d.code && x.t).map((x) => ({ fromSuap: true, t: x.t, n: daysUntil(x.t), tipo: x.tipo, titulo: x.titulo, url: x.url }))));
     const next = items.filter((x) => x.n >= 0).sort((a, b) => a.t - b.t);
     const past = items.filter((x) => x.n < 0).sort((a, b) => b.t - a.t);
     dtList.innerHTML = next.concat(past).map((x) => `<li class="ditem${x.n < 0 ? " past" : x.n <= 3 ? " soon" : ""}">
         <span class="dtype">${x.tipo}</span>
-        <span class="dtxt"><b>${x.t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}</b><small>${x.titulo ? esc(x.titulo) + " · " : ""}<span class="drel">${relDay(x.n)}</span></small></span>
-        <button type="button" data-rm-dt="${x.i}" aria-label="Remover ${x.tipo.toLowerCase()} de ${x.t.toLocaleDateString("pt-BR")}">×</button>
+        <span class="dtxt"><b>${x.t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}</b><small>${x.titulo ? (x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.titulo)}</a>` : esc(x.titulo)) + " · " : ""}<span class="drel">${relDay(x.n)}</span></small></span>
+        ${x.fromSuap ? '<span class="dsrc">SUAP</span>' : `<button type="button" data-rm-dt="${x.i}" aria-label="Remover ${x.tipo.toLowerCase()} de ${x.t.toLocaleDateString("pt-BR")}">×</button>`}
       </li>`).join("") || '<li class="msg">Nenhuma data cadastrada.</li>';
   }
   function openDrawer(c) {
@@ -635,7 +635,7 @@ plano abaixo   = ${left} sem.</div>
   const SUAP_AUTO_MS = 6 * 3600 * 1000;
   const suForm = document.getElementById("su-form"), suUser = document.getElementById("su-user"), suPass = document.getElementById("su-pass"),
     suLogin = document.getElementById("su-login"), suMsg = document.getElementById("su-msg"), suBody = document.getElementById("su-body");
-  let suap = { refresh: null, data: null }, suapAccess = null, suapBusy = false;
+  let suap = { refresh: null, data: null }, suapAccess = null, suapBusy = false, suapDiff = null, suapDiag = "";
   try { const p = JSON.parse(lsGet(LS_SUAP)); if (p && typeof p === "object") suap = { refresh: p.refresh || null, data: p.data || null }; } catch (e) {}
   const suapSave = () => lsSet(LS_SUAP, JSON.stringify(suap));
   const suapErr = (kind, status) => Object.assign(new Error(kind), { kind, status });
@@ -686,16 +686,132 @@ plano abaixo   = ${left} sem.</div>
       const turmas = await suapAll(`/ensino/minhas-turmas-virtuais/${ano}/${per}/`);
       // Boletim e avaliações são complementos: se falharem, as matérias ainda aparecem.
       const [bol, ava] = await Promise.allSettled([suapAll(`/ensino/meu-boletim/${ano}/${per}/`), suapAll("/ensino/minhas-proximas-avaliacoes/")]);
+      const trab = await Promise.allSettled(turmas.filter((t) => t.id != null && t.id !== "").map(async (t) =>
+        (await suapAll(`/ensino/diarios/${encodeURIComponent(t.id)}/trabalhos/`)).map((x) => Object.assign({}, x, { turma: t.descricao || "" }))));
+      const stat = (r) => (r.status === "fulfilled" ? "ok" : (r.reason && r.reason.status) || "falha");
       suap.data = { atualizadoEm: new Date().toISOString(), periodos: keys, periodo: key, turmas,
-        boletim: bol.status === "fulfilled" ? bol.value : [], avaliacoes: ava.status === "fulfilled" ? ava.value : [] };
+        boletim: bol.status === "fulfilled" ? bol.value : [], avaliacoes: ava.status === "fulfilled" ? ava.value : [],
+        trabalhos: trab.flatMap((r) => (r.status === "fulfilled" ? r.value : [])),
+        rotas: { boletim: stat(bol), avaliacoes: stat(ava), trabalhos: trab.map(stat) } };
       suapSave();
       suMsg.textContent = "";
     } catch (e) {
-      suMsg.textContent = e.kind === "auth" ? "Sua conexão com o SUAP expirou. Entre de novo para atualizar."
-        : e.kind === "empty" ? "O SUAP não retornou períodos letivos para esta conta."
-        : e.kind === "http" ? "O SUAP respondeu com erro " + e.status + ". Os últimos dados salvos continuam aqui."
-        : "Não foi possível falar com o SUAP. Os últimos dados salvos continuam aqui.";
+      suMsg.textContent = suapErrMsg(e);
     } finally { suapBusy = false; renderSuap(); }
+  }
+  const suapErrMsg = (e) => e.kind === "auth" ? "Sua conexão com o SUAP expirou. Entre de novo para atualizar."
+    : e.kind === "empty" ? "O SUAP não retornou períodos letivos para esta conta."
+    : e.kind === "http" ? "O SUAP respondeu com erro " + e.status + ". Nada foi alterado, e os últimos dados salvos continuam aqui."
+    : "Não foi possível falar com o SUAP. Nada foi alterado, e os últimos dados salvos continuam aqui.";
+
+  /** Aceita AAAA-MM-DD (com ou sem hora) e DD/MM/AAAA. */
+  function suapDate(v) {
+    const s = String(v || "");
+    const a = /^(\d{4}-\d{2}-\d{2})/.exec(s); if (a) return parseDay(a[1]);
+    const b = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s); return b ? parseDay(b[3] + "-" + b[2] + "-" + b[1]) : null;
+  }
+  /** Avaliações e trabalhos do SUAP em um formato único. */
+  function suapEvents() {
+    const d = suap.data; if (!d) return [];
+    const turmas = Array.isArray(d.turmas) ? d.turmas : [];
+    const codeOf = (txt) => {
+      const c = suapMatch(txt); if (c) return c;
+      const t = turmas.find((x) => x.sigla && nameTokens(txt || "").includes(nameTokens(x.sigla)));
+      return t ? suapMatch(t.descricao) : null;
+    };
+    const av = (Array.isArray(d.avaliacoes) ? d.avaliacoes : []).map((a) => ({ code: codeOf(a.diario), tipo: a.tipo || a.sigla || "Avaliação", titulo: a.descricao || a.sigla || "", ctx: a.diario || "", t: suapDate(a.data), raw: a.data }));
+    const tr = (Array.isArray(d.trabalhos) ? d.trabalhos : []).map((x) => ({ code: suapMatch(x.turma), tipo: "Trabalho", titulo: x.titulo || "", ctx: x.turma || "", t: suapDate(x.data_limite), raw: x.data_limite,
+      url: typeof x.url === "string" && x.url.startsWith("https://suap.ifmt.edu.br/") ? x.url : "" }));
+    return av.concat(tr);
+  }
+
+  /** Limite de faltas: o IFMT exige 75% de frequência, então cabem até 25% da carga horária. */
+  function faltasHtml(b) {
+    if (!b || b.numero_faltas == null || isNaN(+b.numero_faltas)) return "";
+    const n = +b.numero_faltas, ch = +b.carga_horaria, max = ch > 0 ? Math.floor(ch * 0.25) : null, rest = max == null ? null : max - n;
+    const freq = b.percentual_carga_horaria_frequentada != null ? " · frequência " + esc(b.percentual_carga_horaria_frequentada) + "%" : "";
+    const warn = rest == null ? "" : rest < 0 ? "Acima do limite de 25% de faltas" : rest <= max * 0.25 ? (rest === 0 ? "No limite: nenhuma falta a mais" : "Perto do limite: cabem só mais " + rest) : "";
+    return `<span class="suinfo"><b>Faltas</b> ${n}${max != null ? " de até " + max : ""}${freq}</span>${warn ? `<span class="needcur">${warn}</span>` : ""}`;
+  }
+
+  // ---------- Comparação do boletim com a grade (nada muda sem a sua aprovação) ----------
+  function suapSituacao(v) {
+    const n = norm(v || "");
+    if (/aprov/.test(n) && /reprov/.test(n)) return "desconhecida";
+    if (/^(aprovad|aproveit|dispens|certific)/.test(n)) return "feita";
+    if (/^cursando/.test(n)) return "cursando";
+    if (/reprov|tranc|cancel/.test(n)) return "nao-concluida";
+    return "desconhecida";
+  }
+  const suapNota = (v) => { if (v == null || v === "") return null; const n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? null : n; };
+  async function suapCompare() {
+    const keys = (suap.data && suap.data.periodos || []).filter((k) => /^\d{4}\/\d+$/.test(k));
+    if (suapBusy || !keys.length) return;
+    suapBusy = true; suapDiff = null; renderSuap();
+    try {
+      const linhas = [], falhas = [];
+      let ultimoErro = null;
+      for (let i = 0; i < keys.length; i++) {
+        suMsg.textContent = "Lendo boletim " + (i + 1) + " de " + keys.length + "…";
+        try { (await suapAll("/ensino/meu-boletim/" + keys[i] + "/")).forEach((r) => linhas.push({ r, periodo: keys[i] })); }
+        catch (e) { if (e.kind === "auth") throw e; falhas.push(keys[i]); ultimoErro = e; }
+      }
+      if (falhas.length === keys.length) throw ultimoErro; // sem nenhum boletim lido, não há o que comparar
+      const notaDe = (r) => { const f = suapNota(r.media_final_disciplina); return f != null ? f : suapNota(r.media_disciplina); };
+      const escala = linhas.some(({ r }) => (notaDe(r) || 0) > 10) ? 10 : 1; // alguns cursos usam notas de 0 a 100
+      const semPar = new Set(), naoReconhecidas = new Set(), porCodigo = {};
+      linhas.forEach(({ r, periodo }) => {
+        const code = suapMatch(r.disciplina), sit = suapSituacao(r.situacao);
+        if (!code) { if (r.disciplina) semPar.add(r.disciplina); return; }
+        if (sit === "desconhecida" && r.situacao) naoReconhecidas.add(r.situacao);
+        const nota = notaDe(r), item = { periodo, sit, nota: nota == null ? null : Math.round((nota / escala) * 100) / 100 };
+        (porCodigo[code] = porCodigo[code] || []).push(item);
+      });
+      const rank = (k) => { const m = k.split("/"); return +m[0] * 10 + +m[1]; };
+      const fmtSt = (st) => STATUS_LABEL[st].toLowerCase(), fmtN = (n) => (n === "" || n == null ? "—" : String(n).replace(".", ","));
+      const itens = [];
+      Object.keys(porCodigo).sort().forEach((code) => {
+        const hist = porCodigo[code].sort((a, b) => rank(b.periodo) - rank(a.periodo));
+        const alvo = hist.find((x) => x.sit === "feita") || (hist[0].sit === "cursando" && hist[0].periodo === keys[0] ? hist[0] : null);
+        if (!alvo) return;
+        const d = D(code), patch = {}, mudancas = [];
+        if (d.status !== alvo.sit) { patch.status = alvo.sit; mudancas.push("Situação: " + fmtSt(d.status) + " → " + fmtSt(alvo.sit)); }
+        if (alvo.sit === "feita" && alvo.nota != null && +d.nota !== alvo.nota) { patch.nota = alvo.nota; mudancas.push("Nota: " + fmtN(d.nota) + " → " + fmtN(alvo.nota)); }
+        if (d.sem !== alvo.periodo) { patch.sem = alvo.periodo; mudancas.push("Semestre: " + (d.sem || "—") + " → " + alvo.periodo); }
+        if (mudancas.length) itens.push({ code, patch, mudancas });
+      });
+      suapDiff = { itens, semPar: [...semPar], naoReconhecidas: [...naoReconhecidas], falhas };
+      suMsg.textContent = "";
+    } catch (e) { suMsg.textContent = suapErrMsg(e); }
+    finally { suapBusy = false; renderSuap(); }
+  }
+  function suapDiffHtml() {
+    const x = suapDiff; if (!x) return "";
+    const nota = (rot, l) => (l.length ? `<p class="msg"><b>${rot}:</b> ${l.map(esc).join(", ")}.</p>` : "");
+    return `<div class="panel sudiffs">
+      <h3 class="suh">Comparação com o boletim</h3>
+      ${x.itens.length ? `<p class="msg">Revise antes de aplicar. Desmarque o que não quiser mudar.</p>
+        <div class="sudifflist">${x.itens.map((i) => `<label class="sudiff"><input type="checkbox" data-diff="${i.code}" checked><span><b>ENC-${i.code} ${esc(BYCODE[i.code].name)}</b><small>${i.mudancas.map(esc).join(" · ")}</small></span></label>`).join("")}</div>
+        <div class="tools"><button type="button" class="btn primary" data-su="apply">Aplicar selecionadas</button><button type="button" class="btn ghost" data-su="cancel">Cancelar</button></div>`
+      : `<p class="msg">${x.falhas.length ? "Nenhuma diferença nos períodos que foi possível ler." : "A grade já está igual ao boletim."}</p><div class="tools"><button type="button" class="btn ghost" data-su="cancel">Fechar</button></div>`}
+      ${nota("Sem par na grade", x.semPar)}${nota("Situações não reconhecidas (ignoradas)", x.naoReconhecidas)}${nota("Períodos que falharam", x.falhas)}
+    </div>`;
+  }
+
+  /** Mostra só o formato dos dados, sem nomes nem valores pessoais, para ajustar o app. */
+  function suapDiagnostico() {
+    const d = suap.data || {};
+    const mask = (v) => (v == null ? null : String(v).replace(/[0-9]/g, "9").replace(/\p{L}/gu, "a").slice(0, 40));
+    const uniq = (l) => [...new Set(l.filter((x) => x != null && x !== ""))].slice(0, 15);
+    const lst = (v) => (Array.isArray(v) ? v : []);
+    const chaves = (l) => [...new Set(lst(l).flatMap((x) => Object.keys(x || {})))];
+    return JSON.stringify({
+      periodos: lst(d.periodos).length, rotas: d.rotas || null,
+      turmas: { total: lst(d.turmas).length, campos: chaves(d.turmas), comParNaGrade: lst(d.turmas).filter((t) => suapMatch(t.descricao)).length, horarios: uniq(lst(d.turmas).map((t) => mask(t.horarios_de_aula))), siglas: uniq(lst(d.turmas).map((t) => mask(t.sigla))) },
+      boletim: { total: lst(d.boletim).length, campos: chaves(d.boletim), situacoes: uniq(lst(d.boletim).map((b) => b.situacao)), medias: uniq(lst(d.boletim).map((b) => mask(b.media_final_disciplina))), cargas: uniq(lst(d.boletim).map((b) => b.carga_horaria)) },
+      avaliacoes: { total: lst(d.avaliacoes).length, campos: chaves(d.avaliacoes), tipos: uniq(lst(d.avaliacoes).map((a) => a.tipo)), datas: uniq(lst(d.avaliacoes).map((a) => mask(a.data))), comPar: suapEvents().filter((e) => e.code && e.tipo !== "Trabalho").length },
+      trabalhos: { total: lst(d.trabalhos).length, campos: chaves(d.trabalhos), datas: uniq(lst(d.trabalhos).map((t) => mask(t.data_limite))) },
+    }, null, 2);
   }
 
   /** Associa a matéria do SUAP a uma disciplina da grade pelo nome (o maior nome contido vence). */
@@ -711,7 +827,7 @@ plano abaixo   = ${left} sem.</div>
     suForm.hidden = linked;
     suLogin.disabled = suapBusy;
     if (!d) { suBody.innerHTML = linked && !suapBusy ? `<div class="tools"><button type="button" class="btn" data-su="sync">Atualizar</button><button type="button" class="btn ghost" data-su="out">Desconectar</button></div>` : ""; return; }
-    const turmas = Array.isArray(d.turmas) ? d.turmas : [], boletim = Array.isArray(d.boletim) ? d.boletim : [], avals = Array.isArray(d.avaliacoes) ? d.avaliacoes : [];
+    const turmas = Array.isArray(d.turmas) ? d.turmas : [], boletim = Array.isArray(d.boletim) ? d.boletim : [];
     const when = new Date(d.atualizadoEm);
     const found = new Set();
     const cards = turmas.map((t) => {
@@ -723,24 +839,27 @@ plano abaixo   = ${left} sem.</div>
         <span class="sucode mono">${code ? "ENC-" + code : "Sem par na grade"}${t.sigla ? " · " + esc(t.sigla) : ""}</span>
         ${t.horarios_de_aula ? `<span class="suinfo"><b>Horário</b> ${esc(t.horarios_de_aula)}</span>` : ""}
         ${locais ? `<span class="suinfo"><b>Local</b> ${esc(locais)}</span>` : ""}
-        ${b && b.numero_faltas != null ? `<span class="suinfo"><b>Faltas</b> ${esc(b.numero_faltas)}${b.percentual_carga_horaria_frequentada != null ? " · frequência " + esc(b.percentual_carga_horaria_frequentada) + "%" : ""}</span>` : ""}
+        ${faltasHtml(b)}
         ${b && b.situacao ? `<span class="suinfo"><b>Situação</b> ${esc(b.situacao)}</span>` : ""}
         ${dd && dd.status !== "cursando" && d.periodo === S.cfg.atual ? `<span class="needcur">Na grade do app: ${STATUS_LABEL[dd.status].toLowerCase()}</span>` : ""}`;
       return code ? `<button type="button" class="sucard" data-open="${code}">${inner}</button>` : `<div class="sucard">${inner}</div>`;
     }).join("");
     const missing = d.periodo === S.cfg.atual ? CODES.filter((c) => D(c).status === "cursando" && !found.has(c)) : [];
-    const av = avals.map((a) => ({ a, t: parseDay(a.data) })).sort((x, y) => (x.t || Infinity) - (y.t || Infinity)).map(({ a, t }) =>
-      `<li class="ditem suav"><span class="dtype">${esc(a.tipo || a.sigla || "Avaliação")}</span><span class="dtxt"><b>${t ? t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }) : esc(a.data || "Sem data")}</b><small>${esc([a.diario, a.descricao].filter(Boolean).join(" · "))}${t ? ' · <span class="drel">' + relDay(daysUntil(t)) + "</span>" : ""}</small></span></li>`).join("");
+    const av = suapEvents().filter((x) => !x.t || daysUntil(x.t) >= 0).sort((x, y) => (x.t || Infinity) - (y.t || Infinity)).map((x) =>
+      `<li class="ditem suav"><span class="dtype">${esc(x.tipo)}</span><span class="dtxt"><b>${x.t ? x.t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }) : esc(x.raw || "Sem data")}</b><small>${esc([x.ctx, x.titulo].filter(Boolean).join(" · "))}${x.t ? ' · <span class="drel">' + relDay(daysUntil(x.t)) + "</span>" : ""}</small></span></li>`).join("");
     suBody.innerHTML = `
       <div class="sutools">
         <label class="sup"><span class="eyebrow">Período</span><select id="su-periodo" aria-label="Período letivo"${linked ? "" : " disabled"}>${(d.periodos || []).map((k) => `<option${k === d.periodo ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></label>
-        ${linked ? `<button type="button" class="btn" data-su="sync"${suapBusy ? " disabled" : ""}>Atualizar</button>` : ""}
+        ${linked ? `<button type="button" class="btn" data-su="sync"${suapBusy ? " disabled" : ""}>Atualizar</button><button type="button" class="btn" data-su="compare"${suapBusy ? " disabled" : ""}>Comparar com a grade</button>` : ""}
         <button type="button" class="btn ghost" data-su="out"${suapBusy ? " disabled" : ""}>${linked ? "Desconectar" : "Apagar dados do SUAP"}</button>
         <span class="msg">${isNaN(when) ? "" : "Atualizado em " + when.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span>
       </div>
+      ${suapDiffHtml()}
       ${turmas.length ? `<div class="sugrid">${cards}</div>` : '<div class="empty">O SUAP não retornou matérias neste período.</div>'}
       ${missing.length ? `<div class="alert">Marcadas como “cursando” no app, mas fora desta lista: ${missing.map((c) => "ENC-" + c + " " + esc(BYCODE[c].name)).join(", ")}.</div>` : ""}
-      ${av ? `<div class="suavs"><h3 class="suh">Próximas avaliações no SUAP</h3><ul class="dlist">${av}</ul></div>` : ""}`;
+      ${av ? `<div class="suavs"><h3 class="suh">Próximas avaliações e trabalhos no SUAP</h3><ul class="dlist">${av}</ul></div>` : ""}
+      <div class="tools"><button type="button" class="btn ghost" data-su="diag">Ver diagnóstico</button></div>
+      ${suapDiag ? `<div class="sudiag"><p class="msg">Só o formato dos dados, sem nomes, notas ou salas. Confira antes de enviar.</p><pre class="calc" id="su-diag">${esc(suapDiag)}</pre></div>` : ""}`;
   }
   suForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -765,7 +884,20 @@ plano abaixo   = ${left} sem.</div>
     const o = e.target.closest("[data-open]"); if (o) { openDrawer(o.dataset.open); return; }
     const b = e.target.closest("[data-su]"); if (!b || suapBusy) return; // sem isso, uma atualização em curso regravaria dados apagados
     if (b.dataset.su === "sync") suapSync(suap.data && suap.data.periodo);
-    else { suap = { refresh: null, data: null }; suapAccess = null; try { localStorage.removeItem(LS_SUAP); } catch (err) {} suMsg.textContent = "Desconectado. Os dados do SUAP foram apagados deste aparelho."; renderSuap(); }
+    else if (b.dataset.su === "compare") suapCompare();
+    else if (b.dataset.su === "cancel") { suapDiff = null; renderSuap(); }
+    else if (b.dataset.su === "diag") {
+      suapDiag = suapDiag ? "" : suapDiagnostico();
+      if (suapDiag && navigator.clipboard) navigator.clipboard.writeText(suapDiag).then(() => { suMsg.textContent = "Diagnóstico copiado."; }, () => {});
+      renderSuap();
+    } else if (b.dataset.su === "apply") {
+      const marcados = new Set([...suBody.querySelectorAll("[data-diff]:checked")].map((c) => c.dataset.diff));
+      const aplicar = suapDiff.itens.filter((i) => marcados.has(i.code));
+      aplicar.forEach((i) => setOv(i.code, i.patch));
+      suapDiff = null;
+      suMsg.textContent = aplicar.length === 1 ? "1 matéria atualizada na grade." : aplicar.length + " matérias atualizadas na grade.";
+      render();
+    } else { suap = { refresh: null, data: null }; suapAccess = null; suapDiff = null; suapDiag = ""; try { localStorage.removeItem(LS_SUAP); } catch (err) {} suMsg.textContent = "Desconectado. Os dados do SUAP foram apagados deste aparelho."; renderSuap(); }
   });
   suBody.addEventListener("change", (e) => { if (e.target.id === "su-periodo") suapSync(e.target.value); });
 
