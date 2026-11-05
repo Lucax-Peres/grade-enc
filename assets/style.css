@@ -82,6 +82,21 @@ button.sucard{cursor:pointer}button.sucard:hover{border-color:var(--accent)}
 .suinfo b{font-weight:600;color:var(--muted);margin-right:4px}
 .suh{font-size:16px;font-weight:700;font-stretch:90%;margin-bottom:6px}
 .suavs{max-width:640px}
+.suweek{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:10px;align-items:start}
+.sudia{display:grid;gap:6px;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+.sudia.hoje{border-color:var(--accent)}
+.sudia h3{font-size:16px;font-weight:700;font-stretch:85%;display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:0 2px 2px}
+.suaula{display:grid;gap:1px;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-width:0;overflow-wrap:anywhere}
+button.suaula{cursor:pointer}button.suaula:hover{border-color:var(--accent)}
+.suhora{font-family:var(--f-mono);font-size:12px;font-weight:600;color:var(--accent)}
+.sunome{font-size:13.5px;font-weight:600;line-height:1.25}
+.suaula small{color:var(--muted);font-size:12px}
+.sutimes{gap:10px;max-width:640px}
+.sutimes summary{cursor:pointer;font-weight:600;font-size:14px}
+.sutimes .msg{margin:0;font-weight:400}
+.sutimegrid{display:grid;gap:6px}
+.sutime{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,104px) minmax(0,104px);gap:6px;align-items:center;font-size:13px}
+.sutime input{padding:5px 6px;font-size:14px}
 .dsrc{font-family:var(--f-mono);font-size:10px;color:var(--muted);justify-self:center}
 .ditem{grid-template-columns:68px 1fr minmax(28px,auto)}
 .sudiffs{max-width:760px;gap:10px}
@@ -175,7 +190,7 @@ button.sucard{cursor:pointer}button.sucard:hover{border-color:var(--accent)}
 .field{display:grid;gap:4px}
 .field label{font-size:13px;font-weight:600}
 .field small{color:var(--muted);font-size:12px}
-input[type=text],input[type=number],input[type=date],select,textarea{width:100%;min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:16px}
+input[type=text],input[type=number],input[type=date],input[type=time],select,textarea{width:100%;min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:16px}
 textarea{min-height:110px;resize:vertical}
 input[type=range]{width:100%;accent-color:var(--accent)}
 .rangerow{display:flex;gap:10px;align-items:center}
