@@ -5,6 +5,7 @@
  *   2. Semestres e planejamento                    6. Resumo e previsão
  *   3. Navegação por abas (celular)                7. Gaveta de edição
  *   4. Fluxograma (SVG + cartões)                  8. Persistência, backup e PWA
+ *                                                  9. SUAP (matrículas)
  */
 (function () {
   "use strict";
@@ -133,7 +134,7 @@
   }
 
   // ===================== 3. NAVEGAÇÃO POR ABAS (celular) =====================
-  const TABS = ["resumo", "grade", "previsao"];
+  const TABS = ["resumo", "matriculas", "grade", "previsao"];
   function showTab(name) {
     if (!TABS.includes(name)) name = "resumo";
     document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("on", p.dataset.pane === name));
@@ -409,6 +410,7 @@ plano abaixo   = ${left} sem.</div>
   function render() {
     const P = computePlan();
     renderSummary(P); renderCrHistory(); renderNext(); renderFlow(); renderList(); renderForecast(P); syncCfg();
+    renderSuap();
     if (selected) fillDrawerLists();
   }
 
@@ -624,6 +626,149 @@ plano abaixo   = ${left} sem.</div>
     msg.textContent = "Situações, notas, anotações e datas voltaram ao estado do PDF.";
   });
 
+  // ===================== 9. SUAP (matrículas) =====================
+  // O navegador fala direto com a API oficial; não há servidor no meio.
+  // A senha só é usada no login. Guardamos o token de renovação e os dados em
+  // uma chave separada, que não entra no backup em JSON.
+  const SUAP_API = "https://suap.ifmt.edu.br/api";
+  const LS_SUAP = "grade-enc-suap";
+  const SUAP_AUTO_MS = 6 * 3600 * 1000;
+  const suForm = document.getElementById("su-form"), suUser = document.getElementById("su-user"), suPass = document.getElementById("su-pass"),
+    suLogin = document.getElementById("su-login"), suMsg = document.getElementById("su-msg"), suBody = document.getElementById("su-body");
+  let suap = { refresh: null, data: null }, suapAccess = null, suapBusy = false;
+  try { const p = JSON.parse(lsGet(LS_SUAP)); if (p && typeof p === "object") suap = { refresh: p.refresh || null, data: p.data || null }; } catch (e) {}
+  const suapSave = () => lsSet(LS_SUAP, JSON.stringify(suap));
+  const suapErr = (kind, status) => Object.assign(new Error(kind), { kind, status });
+
+  function suapRequest(url, opts) {
+    return fetch(url.startsWith("http") ? url : SUAP_API + url, Object.assign({ credentials: "omit", referrerPolicy: "no-referrer" }, opts));
+  }
+  const suapPost = (url, body) => suapRequest(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  async function suapRenew() {
+    if (!suap.refresh) throw suapErr("auth");
+    const r = await suapPost("/token/refresh", { refresh: suap.refresh });
+    if (r.status === 400 || r.status === 401 || r.status === 403) { suap.refresh = null; suapAccess = null; suapSave(); throw suapErr("auth", r.status); }
+    if (!r.ok) throw suapErr("http", r.status);
+    const j = await r.json();
+    suapAccess = j.access;
+    if (j.refresh) { suap.refresh = j.refresh; suapSave(); }
+  }
+  async function suapGet(url) {
+    if (!suapAccess) await suapRenew();
+    const send = () => suapRequest(url, { headers: { Authorization: "Bearer " + suapAccess, Accept: "application/json" } });
+    let r = await send();
+    if (r.status === 401) { await suapRenew(); r = await send(); }
+    if (!r.ok) throw suapErr("http", r.status);
+    return r.json();
+  }
+  async function suapAll(url) {
+    let out = [], next = url, guard = 0;
+    while (next && guard++ < 10) {
+      const j = await suapGet(next);
+      out = out.concat(Array.isArray(j.results) ? j.results : []);
+      next = typeof j.next === "string" && j.next.startsWith(SUAP_API) ? j.next : null;
+    }
+    return out;
+  }
+  const suapKey = (x) => x.ano_letivo + "/" + x.periodo_letivo;
+
+  async function suapSync(wanted) {
+    if (suapBusy) return;
+    suapBusy = true; suMsg.textContent = "Atualizando dados do SUAP…"; renderSuap();
+    try {
+      const periodos = (await suapAll("/ensino/meus-periodos-letivos/"))
+        .filter((x) => Number.isInteger(x.ano_letivo) && Number.isInteger(x.periodo_letivo))
+        .sort((a, b) => b.ano_letivo - a.ano_letivo || b.periodo_letivo - a.periodo_letivo);
+      if (!periodos.length) throw suapErr("empty");
+      const keys = periodos.map(suapKey);
+      const key = keys.includes(wanted) ? wanted : keys.includes(S.cfg.atual) ? S.cfg.atual : keys[0];
+      const [ano, per] = key.split("/");
+      const turmas = await suapAll(`/ensino/minhas-turmas-virtuais/${ano}/${per}/`);
+      // Boletim e avaliações são complementos: se falharem, as matérias ainda aparecem.
+      const [bol, ava] = await Promise.allSettled([suapAll(`/ensino/meu-boletim/${ano}/${per}/`), suapAll("/ensino/minhas-proximas-avaliacoes/")]);
+      suap.data = { atualizadoEm: new Date().toISOString(), periodos: keys, periodo: key, turmas,
+        boletim: bol.status === "fulfilled" ? bol.value : [], avaliacoes: ava.status === "fulfilled" ? ava.value : [] };
+      suapSave();
+      suMsg.textContent = "";
+    } catch (e) {
+      suMsg.textContent = e.kind === "auth" ? "Sua conexão com o SUAP expirou. Entre de novo para atualizar."
+        : e.kind === "empty" ? "O SUAP não retornou períodos letivos para esta conta."
+        : e.kind === "http" ? "O SUAP respondeu com erro " + e.status + ". Os últimos dados salvos continuam aqui."
+        : "Não foi possível falar com o SUAP. Os últimos dados salvos continuam aqui.";
+    } finally { suapBusy = false; renderSuap(); }
+  }
+
+  /** Associa a matéria do SUAP a uma disciplina da grade pelo nome (o maior nome contido vence). */
+  const nameTokens = (s) => " " + norm(s).replace(/[^a-z0-9]+/g, " ").trim() + " ";
+  function suapMatch(descricao) {
+    const t = nameTokens(descricao || "");
+    let best = null, size = 0;
+    CAT.forEach(([code, name]) => { const n = nameTokens(name); if (t.includes(n) && n.length > size) { best = code; size = n.length; } });
+    return best;
+  }
+  function renderSuap() {
+    const linked = !!suap.refresh, d = suap.data;
+    suForm.hidden = linked;
+    suLogin.disabled = suapBusy;
+    if (!d) { suBody.innerHTML = linked && !suapBusy ? `<div class="tools"><button type="button" class="btn" data-su="sync">Atualizar</button><button type="button" class="btn ghost" data-su="out">Desconectar</button></div>` : ""; return; }
+    const turmas = Array.isArray(d.turmas) ? d.turmas : [], boletim = Array.isArray(d.boletim) ? d.boletim : [], avals = Array.isArray(d.avaliacoes) ? d.avaliacoes : [];
+    const when = new Date(d.atualizadoEm);
+    const found = new Set();
+    const cards = turmas.map((t) => {
+      const code = suapMatch(t.descricao); if (code) found.add(code);
+      const b = boletim.find((x) => (x.codigo_diario != null && String(x.codigo_diario) === String(t.id)) || (x.disciplina && nameTokens(x.disciplina) === nameTokens(t.descricao)));
+      const dd = code ? D(code) : null;
+      const locais = Array.isArray(t.locais_de_aula) ? t.locais_de_aula.filter(Boolean).join(" · ") : "";
+      const inner = `<span class="suname">${esc(t.descricao || t.sigla || "Matéria sem nome")}</span>
+        <span class="sucode mono">${code ? "ENC-" + code : "Sem par na grade"}${t.sigla ? " · " + esc(t.sigla) : ""}</span>
+        ${t.horarios_de_aula ? `<span class="suinfo"><b>Horário</b> ${esc(t.horarios_de_aula)}</span>` : ""}
+        ${locais ? `<span class="suinfo"><b>Local</b> ${esc(locais)}</span>` : ""}
+        ${b && b.numero_faltas != null ? `<span class="suinfo"><b>Faltas</b> ${esc(b.numero_faltas)}${b.percentual_carga_horaria_frequentada != null ? " · frequência " + esc(b.percentual_carga_horaria_frequentada) + "%" : ""}</span>` : ""}
+        ${b && b.situacao ? `<span class="suinfo"><b>Situação</b> ${esc(b.situacao)}</span>` : ""}
+        ${dd && dd.status !== "cursando" && d.periodo === S.cfg.atual ? `<span class="needcur">Na grade do app: ${STATUS_LABEL[dd.status].toLowerCase()}</span>` : ""}`;
+      return code ? `<button type="button" class="sucard" data-open="${code}">${inner}</button>` : `<div class="sucard">${inner}</div>`;
+    }).join("");
+    const missing = d.periodo === S.cfg.atual ? CODES.filter((c) => D(c).status === "cursando" && !found.has(c)) : [];
+    const av = avals.map((a) => ({ a, t: parseDay(a.data) })).sort((x, y) => (x.t || Infinity) - (y.t || Infinity)).map(({ a, t }) =>
+      `<li class="ditem suav"><span class="dtype">${esc(a.tipo || a.sigla || "Avaliação")}</span><span class="dtxt"><b>${t ? t.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }) : esc(a.data || "Sem data")}</b><small>${esc([a.diario, a.descricao].filter(Boolean).join(" · "))}${t ? ' · <span class="drel">' + relDay(daysUntil(t)) + "</span>" : ""}</small></span></li>`).join("");
+    suBody.innerHTML = `
+      <div class="sutools">
+        <label class="sup"><span class="eyebrow">Período</span><select id="su-periodo" aria-label="Período letivo"${linked ? "" : " disabled"}>${(d.periodos || []).map((k) => `<option${k === d.periodo ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></label>
+        ${linked ? `<button type="button" class="btn" data-su="sync"${suapBusy ? " disabled" : ""}>Atualizar</button>` : ""}
+        <button type="button" class="btn ghost" data-su="out"${suapBusy ? " disabled" : ""}>${linked ? "Desconectar" : "Apagar dados do SUAP"}</button>
+        <span class="msg">${isNaN(when) ? "" : "Atualizado em " + when.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span>
+      </div>
+      ${turmas.length ? `<div class="sugrid">${cards}</div>` : '<div class="empty">O SUAP não retornou matérias neste período.</div>'}
+      ${missing.length ? `<div class="alert">Marcadas como “cursando” no app, mas fora desta lista: ${missing.map((c) => "ENC-" + c + " " + esc(BYCODE[c].name)).join(", ")}.</div>` : ""}
+      ${av ? `<div class="suavs"><h3 class="suh">Próximas avaliações no SUAP</h3><ul class="dlist">${av}</ul></div>` : ""}`;
+  }
+  suForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (suapBusy) return;
+    const username = suUser.value.trim(), password = suPass.value;
+    if (!username || !password) { suMsg.textContent = "Preencha matrícula e senha."; return; }
+    suapBusy = true; suLogin.disabled = true; suMsg.textContent = "Conectando ao SUAP…";
+    let ok = false;
+    try {
+      const r = await suapPost("/token/pair", { username, password });
+      if (r.ok) {
+        const j = await r.json();
+        suapAccess = j.access; suap.refresh = j.refresh; suapSave(); ok = true;
+      } else suMsg.textContent = r.status === 401 || r.status === 403
+        ? "O SUAP recusou o acesso. Confira matrícula e senha. Se você só entra pelo Gov.BR ou usa verificação em duas etapas, este login pode não funcionar."
+        : "O SUAP respondeu com erro " + r.status + ". Tente de novo mais tarde.";
+    } catch (err) { suMsg.textContent = "Não foi possível falar com o SUAP. Confira sua internet e tente de novo."; }
+    suPass.value = ""; suapBusy = false; suLogin.disabled = false;
+    if (ok) { suUser.value = ""; suapSync(); }
+  });
+  suBody.addEventListener("click", (e) => {
+    const o = e.target.closest("[data-open]"); if (o) { openDrawer(o.dataset.open); return; }
+    const b = e.target.closest("[data-su]"); if (!b || suapBusy) return; // sem isso, uma atualização em curso regravaria dados apagados
+    if (b.dataset.su === "sync") suapSync(suap.data && suap.data.periodo);
+    else { suap = { refresh: null, data: null }; suapAccess = null; try { localStorage.removeItem(LS_SUAP); } catch (err) {} suMsg.textContent = "Desconectado. Os dados do SUAP foram apagados deste aparelho."; renderSuap(); }
+  });
+  suBody.addEventListener("change", (e) => { if (e.target.id === "su-periodo") suapSync(e.target.value); });
+
   // PWA: service worker (modo offline) e botão "Instalar app"
   if (STANDALONE) {
     if ("serviceWorker" in navigator && location.protocol === "https:") {
@@ -647,4 +792,5 @@ plano abaixo   = ${left} sem.</div>
   }
 
   render();
+  if (suap.refresh && navigator.onLine !== false && (!suap.data || Date.now() - new Date(suap.data.atualizadoEm) > SUAP_AUTO_MS)) suapSync(suap.data && suap.data.periodo);
 })();

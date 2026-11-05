@@ -101,6 +101,10 @@ O ícone "Grade ENC" aparece na tela inicial e abre em tela cheia, como um app.
 - Limpar os dados do navegador apaga suas edições. Exporte um backup de vez em quando.
 - Próximo passo para sincronizar de verdade: um backend (ex.: **Supabase** com login). Fica como evolução do projeto.
 
+### Matrículas (SUAP)
+
+A aba **Matrículas** lê suas matérias, horários e salas pela API oficial do SUAP do IFMT, direto do navegador, sem servidor no meio. A senha só é usada no login e não é salva. O token de renovação e os dados ficam em `localStorage` (`grade-enc-suap`), fora do backup em JSON e fora deste repositório. **Desconectar** apaga tudo do aparelho.
+
 ## 5. Como fazer mudanças comuns
 
 | Quero… | Onde mexer |
