@@ -633,6 +633,7 @@ plano abaixo   = ${left} sem.</div>
   const SUAP_API = "https://suap.ifmt.edu.br/api";
   const LS_SUAP = "grade-enc-suap";
   const SUAP_AUTO_MS = 6 * 3600 * 1000;
+  const SUAP_DIAG = /[?&]diag\b/.test(location.search); // o botão de diagnóstico só aparece com ?diag=1 no endereço
   const suForm = document.getElementById("su-form"), suUser = document.getElementById("su-user"), suPass = document.getElementById("su-pass"),
     suLogin = document.getElementById("su-login"), suMsg = document.getElementById("su-msg"), suBody = document.getElementById("su-body");
   let suap = { refresh: null, data: null }, suapAccess = null, suapBusy = false, suapDiff = null, suapDiag = "", suapTimesOpen = false, suapTimesDirty = false, suapDiaSel = null, suapEventos = [];
@@ -1073,7 +1074,7 @@ plano abaixo   = ${left} sem.</div>
       ${turmas.length ? `<h3 class="suh">Matérias</h3><div class="sugrid">${cards}</div>` : '<div class="empty">O SUAP não retornou matérias neste período.</div>'}
       ${missing.length ? `<div class="alert">Marcadas como “cursando” no app, mas fora desta lista: ${missing.map((c) => "ENC-" + c + " " + esc(BYCODE[c].name)).join(", ")}.</div>` : ""}
       ${av ? `<div class="suavs"><h3 class="suh">Próximas avaliações e trabalhos no SUAP</h3><ul class="dlist">${av}</ul></div>` : ""}
-      <div class="tools"><button type="button" class="btn ghost" data-su="diag">Ver diagnóstico</button></div>
+      ${SUAP_DIAG ? `<div class="tools"><button type="button" class="btn ghost" data-su="diag">Ver diagnóstico</button></div>` : ""}
       ${suapDiag ? `<div class="sudiag"><p class="msg">Só o formato dos dados, sem nomes, notas ou salas. Confira antes de enviar.</p><pre class="calc" id="su-diag">${esc(suapDiag)}</pre></div>` : ""}`;
     suapAgora();
   }
