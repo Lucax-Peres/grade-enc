@@ -24,12 +24,23 @@
 
   // O estado guarda só o que você MUDOU em relação ao PDF ("overrides").
   function nowSem() { const d = new Date(); return d.getFullYear() + "/" + (d.getMonth() < 6 ? 1 : 2); }
+  /**
+   * Grava no estado a situação vinda do PDF. Assim o histórico passa a morar no navegador
+   * e o código pode deixar de carregá-lo, sem que ninguém perca as matérias já concluídas.
+   */
+  function fixarSituacaoDoPdf(ov) {
+    CODES.forEach((c) => {
+      const base = baseStatus(c);
+      if (base !== "pendente" && !(ov[c] && ov[c].status)) ov[c] = Object.assign({}, ov[c], { status: base });
+    });
+    return ov;
+  }
   function freshState() {
-    return { v: 1, ov: {}, cfg: { atual: nowSem(), ingresso: "", cap: BASE_CUR.reduce((s, c) => s + BYCODE[c].h, 0), enforce: true } };
+    return { v: 1, ov: fixarSituacaoDoPdf({}), cfg: { atual: nowSem(), ingresso: "", cap: BASE_CUR.reduce((s, c) => s + BYCODE[c].h, 0), enforce: true } };
   }
   function normalize(p) {
     const f = freshState();
-    return { v: 1, ov: p && typeof p.ov === "object" && p.ov ? p.ov : {}, cfg: Object.assign(f.cfg, (p && p.cfg) || {}) };
+    return { v: 1, ov: fixarSituacaoDoPdf(p && typeof p.ov === "object" && p.ov ? p.ov : {}), cfg: Object.assign(f.cfg, (p && p.cfg) || {}) };
   }
   const LS_KEY = "grade-enc-v1";
   const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -37,6 +48,7 @@
 
   let S = freshState();
   try { const raw = lsGet(LS_KEY); if (raw) { const p = JSON.parse(raw); if (p && p.v === 1) S = normalize(p); } } catch (e) {}
+  lsSet(LS_KEY, JSON.stringify({ v: 1, ov: S.ov, cfg: S.cfg }));
 
   /** Disciplina "resolvida": dados do PDF + suas edições. */
   function D(c) {
@@ -56,7 +68,7 @@
     const o = Object.assign({}, S.ov[c] || {}, patch);
     Object.keys(o).forEach((k) => { if (o[k] === "" || o[k] == null) delete o[k]; });
     if (o.datas && !o.datas.length) delete o.datas;
-    if (o.status === baseStatus(c)) delete o.status;
+    if (o.status === "pendente" && baseStatus(c) === "pendente") delete o.status; // a situação do PDF fica gravada, para sobreviver à remoção dela do código
     if (o.pre && JSON.stringify(o.pre.slice().sort()) === JSON.stringify((PRE[c] || []).slice().sort())) delete o.pre;
     if (Object.keys(o).length) S.ov[c] = o; else delete S.ov[c];
     scheduleSave();
